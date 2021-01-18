@@ -1660,6 +1660,78 @@ struct HandshakeAnalysisPass
 };
 } // namespace
 
+// This pass iteratively checks the use count of each value, and reformats the
+// MLIR such that every value has exact one use. If a value has multiple uses, a
+// fork is inserted. If a value has no use, a sink is inserted.
+void insertOpForExactOneUse(Value value, handshake::FuncOp funcOp,
+                            OpBuilder &rewriter) {
+
+  if (value.use_empty())
+    rewriter.create<SinkOp>(funcOp.getLoc(), value);
+  else {
+    auto uses = value.getUses();
+    auto outs = std::distance(cbegin(uses), cend(uses));
+    std::vector<Operation *> ops;
+    std::vector<unsigned> idx;
+    for (auto &use : uses) {
+      ops.push_back(use.getOwner());
+      idx.push_back(use.getOperandNumber());
+    }
+
+    // There is an unkown issue when forking the function arguments directly
+    // The temporary solution to to create merge followed by the fork, and
+    // remove the merge after creating fork
+    rewriter.setInsertionPoint(
+        &(funcOp.getOperation()->getRegions().begin()->begin()->back()));
+    auto tempMerge = rewriter.create<circt::handshake::MergeOp>(
+        funcOp.getLoc(), value.getUses().begin()->get(), 1);
+    auto newOp = rewriter.create<circt::handshake::ForkOp>(
+        funcOp.getLoc(), tempMerge.getResult(), outs);
+
+    for (auto i = 0; i < outs; i++)
+      ops[i]->setOperand(idx[i], newOp.getResult(i));
+
+    newOp.getOperation()->setOperand(0, tempMerge.getOperand(0));
+    tempMerge.erase();
+  }
+}
+
+namespace {
+
+struct HandshakeInsertForkSinkPass
+    : public PassWrapper<HandshakeInsertForkSinkPass, OperationPass<ModuleOp>> {
+  void runOnOperation() override {
+    auto module = getOperation();
+    for (auto funcOp : module.getOps<handshake::FuncOp>()) {
+      OpBuilder rewriter(funcOp);
+      rewriter.setInsertionPoint(
+          &(funcOp.getOperation()->getRegions().begin()->begin()->back()));
+
+      // Fork funcOp arguments
+      for (unsigned i = 0, e = funcOp.getNumArguments(); i != e; ++i)
+        if (!funcOp.getArgument(i).hasOneUse())
+          insertOpForExactOneUse(funcOp.body().getArgument(i), funcOp,
+                                 rewriter);
+
+      // Fork values in funcOp
+      for (auto &block : funcOp)
+        for (auto &nestedOp : block)
+          for (mlir::Value out : nestedOp.getResults())
+            if (!out.hasOneUse())
+              insertOpForExactOneUse(out, funcOp, rewriter);
+
+      // Verify the transformation
+      for (unsigned i = 0, e = funcOp.getNumArguments(); i != e; ++i)
+        assert(funcOp.getArgument(i).hasOneUse());
+      for (auto &block : funcOp)
+        for (auto &nestedOp : block)
+          for (mlir::Value out : nestedOp.getResults())
+            checkUseCount(&nestedOp, out);
+    }
+  }
+};
+} // namespace
+
 void handshake::registerStandardToHandshakePasses() {
   PassRegistration<HandshakeAnalysisPass>(
       "analyze-dataflow", "Print resource (operation) statistics");
@@ -1671,4 +1743,8 @@ void handshake::registerStandardToHandshakePasses() {
       "remove-block-structure", "Remove block structure in handshake IR");
   PassRegistration<HandshakeInsertBufferPass>(
       "handshake-insert-buffer", "Insert buffers to break graph cycles.");
+  PassRegistration<HandshakeInsertForkSinkPass>(
+      "handshake-insert-fork-sink",
+      "Check the use count and insert forks/sinks for values that do not have "
+      "exactly one use.");
 }
