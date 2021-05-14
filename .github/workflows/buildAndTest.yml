@@ -13,7 +13,7 @@ jobs:
   # cache.
   build-llvm:
     name: Build LLVM
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-18.04.4
     steps:
       # Clone the CIRCT repo and its submodules. Do shallow clone to save clone
       # time.
@@ -86,7 +86,7 @@ jobs:
   build-circt:
     name: Build and Test
     needs: build-llvm
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-18.04.4
     steps:
       - name: Configure Environment
         run: echo "$GITHUB_WORKSPACE/llvm/install/bin" >> $GITHUB_PATH
