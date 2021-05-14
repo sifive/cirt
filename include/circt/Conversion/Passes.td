@@ -88,6 +88,11 @@ def ConvertRTLToLLHD : Pass<"convert-rtl-to-llhd", "mlir::ModuleOp"> {
 // StandardToHandshake
 //===----------------------------------------------------------------------===//
 
+def HandshakeCleanFuncArg : Pass<"clean-memref-args", "mlir::ModuleOp"> {
+  let summary = "Remove unused function args";
+  let constructor = "circt::createHandshakeCleanFuncArgPass()";
+}
+
 def HandshakeAnalysis : Pass<"analyze-dataflow", "mlir::ModuleOp"> {
   let summary = "Print resource (operation) statistics";
   let constructor = "circt::createHandshakeAnalysisPass()";

@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <fstream>
 #include <list>
 
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
@@ -246,6 +247,7 @@ Any readValueWithType(mlir::Type type, std::string in) {
     assert(0 && "unknown argument type!\n");
     return {};
   }
+  return nullptr;
 }
 
 std::string printAnyValueWithType(mlir::Type type, Any &value) {
@@ -461,6 +463,17 @@ void executeFunction(mlir::FuncOp &toplevel,
   }
 }
 
+static void exportData(llvm::DenseMap<unsigned, unsigned> &memoryMap,
+                       std::vector<std::vector<llvm::Any>> &store) {
+  // Export memory data into .dat
+  for (auto &mem : memoryMap) {
+    std::ofstream file("dataout" + std::to_string(mem.first) + ".dat");
+    for (auto element : store[mem.second])
+      file << any_cast<APInt>(element).getSExtValue() << "\n";
+    file.close();
+  }
+}
+
 void executeHandshakeFunction(handshake::FuncOp &toplevel,
                               llvm::DenseMap<mlir::Value, Any> &valueMap,
                               llvm::DenseMap<mlir::Value, double> &timeMap,
@@ -557,6 +570,7 @@ void executeHandshakeFunction(handshake::FuncOp &toplevel,
         results[i] = inValues[i];
         resultTimes[i] = timeMap[returnOp.getOperand(i)];
       }
+      exportData(memoryMap, store);
       return;
       //} else {
       // implement function calls.
@@ -694,6 +708,11 @@ bool simulate(StringRef toplevelFunction, ArrayRef<std::string> inputArgs,
     outs() << printAnyValueWithType(t, results[i]) << " ";
     time = std::max(resultTimes[i], time);
   }
+  // Return time if there is no result
+  if (!results.size()) {
+    for (auto t : timeMap)
+      time = std::max(t.second, time);
+  }
   // Go back through the arguments and output any memrefs.
   for (unsigned i = 0; i < realInputs; i++) {
     mlir::Type type = ftype.getInput(i);
@@ -710,7 +729,7 @@ bool simulate(StringRef toplevelFunction, ArrayRef<std::string> inputArgs,
       outs() << " ";
     }
   }
-  outs() << "\n";
+  outs() << "\nTime: " << time << "\n";
 
   simulatedTime += (int)time;
 

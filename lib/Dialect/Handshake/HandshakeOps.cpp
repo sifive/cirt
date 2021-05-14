@@ -29,6 +29,8 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/Support/Debug.h"
 
+#include <fstream>
+
 using namespace circt;
 using namespace circt::handshake;
 
@@ -644,6 +646,19 @@ bool handshake::MemoryOp::allocateMemory(
       store[ptr][i] = APFloat(0.0);
     } else {
       llvm_unreachable("Unknown result type!\n");
+    }
+  }
+
+  std::ifstream file;
+  file.open("datain" + std::to_string(id) + ".dat");
+  if (file.is_open()) {
+    llvm::errs() << "Loaded the initialized data for memory " << id << ".\n";
+    int i = 0;
+    while (!file.eof() && i < allocationSize) {
+      int num;
+      file >> num;
+      store[ptr][i] = APInt(width, num);
+      i++;
     }
   }
 

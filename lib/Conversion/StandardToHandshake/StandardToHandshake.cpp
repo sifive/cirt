@@ -42,7 +42,7 @@ using namespace std;
 
 typedef DenseMap<Block *, vector<Value>> BlockValues;
 typedef DenseMap<Block *, vector<Operation *>> BlockOps;
-typedef DenseMap<Value, Operation *> blockArgPairs;
+typedef DenseMap<Value, Operation *> BlockArgPairs;
 
 /// Remove basic blocks inside the given FuncOp. This allows the result to be
 /// a valid graph region, since multi-basic block regions are not allowed to
@@ -336,7 +336,7 @@ Operation *insertMerge(Block *block, Value val,
 // Adds Merge for every live-in and block argument
 // Returns DenseMap of all inserted operations
 BlockOps insertMergeOps(handshake::FuncOp f, BlockValues blockLiveIns,
-                        blockArgPairs &mergePairs,
+                        BlockArgPairs &mergePairs,
                         ConversionPatternRewriter &rewriter) {
   BlockOps blockMerges;
 
@@ -446,7 +446,7 @@ Operation *getStartOp(Block *block) {
 }
 
 void reconnectMergeOps(handshake::FuncOp f, BlockOps blockMerges,
-                       blockArgPairs &mergePairs) {
+                       BlockArgPairs &mergePairs) {
   // All merge operands are initially set to original (defining) value
   // We here replace defining value with appropriate value from predecessor
   // block The predecessor can either be a merge, the original defining value,
@@ -502,7 +502,7 @@ void reconnectMergeOps(handshake::FuncOp f, BlockOps blockMerges,
 }
 void addMergeOps(handshake::FuncOp f, ConversionPatternRewriter &rewriter) {
 
-  blockArgPairs mergePairs;
+  BlockArgPairs mergePairs;
 
   // blockLiveIns: live in variables of block
   BlockValues liveIns = livenessAnalysis(f);
@@ -1717,6 +1717,60 @@ struct HandshakeAnalysisPass
   }
 };
 } // namespace
+
+// Temporary: remove unused function args
+// The array arguements are impelemented as local memory ops in handshake
+// dialect, and the original arguements have no use. This pass temporary removes
+// these used args to let the simulator work properly by reading external data
+// files.
+namespace {
+
+struct HandshakeCleanFuncArgPass
+    : public HandshakeCleanFuncArgBase<HandshakeCleanFuncArgPass> {
+  void runOnOperation() override {
+    auto m = getOperation();
+    for (auto funcOp : m.getOps<handshake::FuncOp>()) {
+      OpBuilder rewriter(funcOp);
+
+      // Get function arguments
+      std::vector<unsigned int> argIndices;
+      llvm::SmallVector<mlir::Type, 8> argTypes;
+      auto i = 0;
+      for (auto &arg : funcOp.getArguments()) {
+        auto type = arg.getType();
+        if (arg.use_empty())
+          argIndices.push_back(i);
+        else if (arg.hasOneUse()) {
+          auto sinkOp =
+              dyn_cast<handshake::SinkOp>(arg.use_begin()->getOwner());
+          if (sinkOp) {
+            sinkOp.erase();
+            argIndices.push_back(i);
+          } else
+            argTypes.push_back(type);
+        } else
+          argTypes.push_back(type);
+        i++;
+      }
+
+      // Get function results
+      llvm::SmallVector<mlir::Type, 8> resTypes;
+      for (auto arg : funcOp.getType().getResults())
+        resTypes.push_back(arg);
+
+      auto funcType = rewriter.getFunctionType(argTypes, resTypes);
+      auto originalNumArgs = i;
+      impl::eraseFunctionArguments(funcOp, argIndices, originalNumArgs,
+                                   funcType);
+    }
+  }
+};
+} // namespace
+
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
+circt::createHandshakeCleanFuncArgPass() {
+  return std::make_unique<HandshakeCleanFuncArgPass>();
+}
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
 circt::createHandshakeAnalysisPass() {

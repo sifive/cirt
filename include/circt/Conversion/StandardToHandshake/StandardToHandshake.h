@@ -29,6 +29,9 @@ class FuncOp;
 } // namespace handshake
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
+createHandshakeCleanFuncArgPass();
+
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
 createHandshakeAnalysisPass();
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
