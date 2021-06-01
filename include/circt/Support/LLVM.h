@@ -247,4 +247,3 @@ namespace OpTrait = mlir::OpTrait;
 } // namespace circt
 
 #endif // CIRCT_SUPPORT_LLVM_H
-

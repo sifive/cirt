@@ -17,15 +17,8 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OperationSupport.h"
 #include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Casting.h"
-
 #include <memory>
-
-// TODO: do i need these?
-#include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/MapVector.h"
 
 namespace circt {
 namespace firrtl {
@@ -40,12 +33,16 @@ public:
     other.module = nullptr;
   }
 
-  /// Get the module this
+  /// Get the module that this node is tracking.
   Operation *getModule() const { return module; }
 
-  using iterator = EdgeSetT::const_iterator;
-  iterator begin() const { return instances.begin(); }
-  iterator end() const { return instances.end(); }
+  using iterator = EdgeSetT::iterator;
+  iterator begin() { return instances.begin(); }
+  iterator end() { return instances.end(); }
+
+  using const_iterator = EdgeSetT::const_iterator;
+  const_iterator begin() const { return instances.begin(); }
+  const_iterator end() const { return instances.end(); }
 
 private:
   /// Record that a module instantiates this module.
@@ -88,8 +85,6 @@ public:
   /// Get the node corresponding to the module.  If the node has does not exist
   /// yet, it will be created.
   InstanceGraphNode *getOrAddNode(Operation *module) {
-    // Look up the node in the map. If it is a module we haven't seen before,
-    // add it to the back up the vector, and update the map.
     auto itAndInserted = nodeMap.try_emplace(module, 0);
     auto &index = itAndInserted.first->second;
     if (itAndInserted.second) {
@@ -99,15 +94,15 @@ public:
     return nodes[index].get();
   }
 
-  /// Get the first node in the graph.
   using iterator = NodeIterator;
   iterator begin() const { return nodes.begin(); }
   iterator end() const { return nodes.end(); }
 
 private:
-  // This is not using a MapVector to save a bit of memory.  The
-  // InstanceGraphNode holds a copy of the the Operation* used as a key, and
-  // MapVector uses a vector of pair<Operation*,InstanceGraphNode>.
+  // Implementation note: This is not using a MapVector to save a bit of memory.
+  // The InstanceGraphNode holds a copy of the the Operation* used as a key, and
+  // MapVector would duplicate this information in a
+  // pair<Operation*, InstanceGraphNode>.
 
   /// The storage for graph nodes, with deterministic iteration.
   std::vector<std::unique_ptr<InstanceGraphNode>> nodes;
@@ -120,37 +115,34 @@ private:
 } // namespace circt
 
 namespace llvm {
-// Provide graph traits for traversing call graphs using standard graph
-// traversals.
-template <>
-struct GraphTraits<const circt::firrtl::InstanceGraphNode *> {
-  using NodeRef = circt::firrtl::InstanceGraphNode *;
-  static NodeRef getEntryNode(NodeRef node) { return node; }
 
-  // ChildIteratorType/begin/end - Allow iteration over all nodes in the graph.
-  using ChildIteratorType = circt::firrtl::InstanceGraphNode::iterator;
+// Provide graph traits for iterating the modules in inverse order.
+template <>
+struct GraphTraits<Inverse<circt::firrtl::InstanceGraphNode *>> {
+  using NodeType = circt::firrtl::InstanceGraphNode;
+  using NodeRef = NodeType *;
+  using ChildIteratorType = NodeType::iterator;
+
+  static NodeRef getEntryNode(Inverse<NodeRef> inverse) {
+    return inverse.Graph;
+  }
   static ChildIteratorType child_begin(NodeRef node) { return node->begin(); }
   static ChildIteratorType child_end(NodeRef node) { return node->end(); }
 };
 
+// Provide constant graph traits for iterating the modules in inverse order.
 template <>
-struct GraphTraits<const circt::firrtl::InstanceGraph *>
-    : public GraphTraits<const circt::firrtl::InstanceGraphNode *> {
-  /// The entry node into the graph is the external node.
-  static NodeRef
-  getEntryNode(const circt::firrtl::InstanceGraph *instanceGraph) {
-    return *instanceGraph->begin();
-  }
+struct GraphTraits<Inverse<const circt::firrtl::InstanceGraphNode *>> {
+  using NodeType = const circt::firrtl::InstanceGraphNode;
+  using NodeRef = NodeType *;
+  using ChildIteratorType = NodeType::const_iterator;
 
-  // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
-  using nodes_iterator = circt::firrtl::InstanceGraph::iterator;
-  static nodes_iterator
-  nodes_begin(circt::firrtl::InstanceGraph *instanceGraph) {
-    return instanceGraph->begin();
+  static NodeRef getEntryNode(Inverse<NodeRef> inverse) {
+    return inverse.Graph;
   }
-  static nodes_iterator nodes_end(circt::firrtl::InstanceGraph *instanceGraph) {
-    return instanceGraph->end();
-  }
+  static ChildIteratorType child_begin(NodeRef node) { return node->begin(); }
+  static ChildIteratorType child_end(NodeRef node) { return node->end(); }
 };
+
 } // end namespace llvm
 #endif // CIRCT_DIALECT_FIRRTL_INSTANCEGRAPH_H

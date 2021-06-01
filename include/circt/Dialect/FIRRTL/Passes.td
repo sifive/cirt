@@ -178,18 +178,18 @@ def PrefixModules : Pass<"firrtl-prefix-modules", "firrtl::CircuitOp"> {
   let summary = "Prefixes names of modules and mems in a hiearchy";
   let description = [{
     This pass looks for modules annotated with the
-    `NestedPrefixModulesAnnotation` and prefixes the names of all memories and
-    modules instantiated underneath it.  This pass will duplicate a module to
-    rename only the modules instantiated in the hiearchy rooted at the
-    annotated module.  If there are no remaining instances of the original
-    module, it will be removed.
+    `NestedPrefixModulesAnnotation` and prefixes the names of all modules
+    instantiated underneath it.  This pass will duplicate a module to rename
+    only the modules instantiated in the hiearchy rooted at the annotated
+    module.  If there are no remaining instances of the original module, it
+    will be removed.
 
     The supported `firrtl.module` annotation is:
-    - ```
+    ```
       {
-        class = "sifive.enterprise.firrtl.NestedPrefixModulesAnnotation";
-        prefix = "MyPrefix_";
-        inclusive = true;
+        class = "sifive.enterprise.firrtl.NestedPrefixModulesAnnotation",
+        prefix = "MyPrefix_",
+        inclusive = true
       }
     ```
 
