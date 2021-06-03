@@ -24,7 +24,7 @@ namespace circt {
 namespace firrtl {
 
 class InstanceGraphNode {
-  using EdgeSetT = llvm::SmallVector<InstanceGraphNode *, 1>;
+  using EdgeVec = std::vector<InstanceGraphNode *>;
 
 public:
   InstanceGraphNode(Operation *module) : module(module) {}
@@ -36,13 +36,9 @@ public:
   /// Get the module that this node is tracking.
   Operation *getModule() const { return module; }
 
-  using iterator = EdgeSetT::iterator;
+  using iterator = EdgeVec::const_iterator;
   iterator begin() { return instances.begin(); }
   iterator end() { return instances.end(); }
-
-  using const_iterator = EdgeSetT::const_iterator;
-  const_iterator begin() const { return instances.begin(); }
-  const_iterator end() const { return instances.end(); }
 
 private:
   /// Record that a module instantiates this module.
@@ -52,7 +48,7 @@ private:
   Operation *module;
 
   /// List of modules which instantiate this one.
-  EdgeSetT instances;
+  EdgeVec instances;
 
   // Provide access to the constructor.
   friend class InstanceGraph;
@@ -62,18 +58,18 @@ private:
 /// inverse of the regular instance graph.
 class InstanceGraph {
 
-  using NodeMapT = std::vector<std::unique_ptr<InstanceGraphNode>>;
-  static InstanceGraphNode *unwrap(const NodeMapT::value_type &value) {
+  using NodeVec = std::vector<std::unique_ptr<InstanceGraphNode>>;
+  static InstanceGraphNode *unwrap(const NodeVec::value_type &value) {
     return value.get();
   }
 
   /// Iterator that unwraps a unique_ptr to return a regular pointer.
   struct NodeIterator final
-      : public llvm::mapped_iterator<NodeMapT::const_iterator,
+      : public llvm::mapped_iterator<NodeVec::const_iterator,
                                      decltype(&unwrap)> {
     /// Initializes the result type iterator to the specified result iterator.
-    NodeIterator(NodeMapT::const_iterator it)
-        : llvm::mapped_iterator<NodeMapT::const_iterator, decltype(&unwrap)>(
+    NodeIterator(NodeVec::const_iterator it)
+        : llvm::mapped_iterator<NodeVec::const_iterator, decltype(&unwrap)>(
               it, &unwrap) {}
   };
 
@@ -105,7 +101,7 @@ private:
   // pair<Operation*, InstanceGraphNode>.
 
   /// The storage for graph nodes, with deterministic iteration.
-  std::vector<std::unique_ptr<InstanceGraphNode>> nodes;
+  NodeVec nodes;
 
   /// This maps each operation to its graph node.
   DenseMap<Operation *, unsigned> nodeMap;
@@ -122,20 +118,6 @@ struct GraphTraits<Inverse<circt::firrtl::InstanceGraphNode *>> {
   using NodeType = circt::firrtl::InstanceGraphNode;
   using NodeRef = NodeType *;
   using ChildIteratorType = NodeType::iterator;
-
-  static NodeRef getEntryNode(Inverse<NodeRef> inverse) {
-    return inverse.Graph;
-  }
-  static ChildIteratorType child_begin(NodeRef node) { return node->begin(); }
-  static ChildIteratorType child_end(NodeRef node) { return node->end(); }
-};
-
-// Provide constant graph traits for iterating the modules in inverse order.
-template <>
-struct GraphTraits<Inverse<const circt::firrtl::InstanceGraphNode *>> {
-  using NodeType = const circt::firrtl::InstanceGraphNode;
-  using NodeRef = NodeType *;
-  using ChildIteratorType = NodeType::const_iterator;
 
   static NodeRef getEntryNode(Inverse<NodeRef> inverse) {
     return inverse.Graph;
