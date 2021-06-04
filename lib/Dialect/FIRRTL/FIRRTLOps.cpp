@@ -973,14 +973,23 @@ static LogicalResult verifyMemOp(MemOp mem) {
       return failure();
     }
 
-    // Check that the port type matches the kind that we determined
-    // for this port.  This catches situations of extraneous port
-    // fields beind included or the fields being named incorrectly.
-    FIRRTLType expectedType =
-        FlipType::get(mem.getTypeForPort(mem.depth(), dataType, portKind));
     // Compute the original port type as portBundleType may have
     // stripped outer flip information.
     auto originalType = mem.getResult(i).getType();
+    size_t maskSize = 0;
+    if (auto bType = originalType.cast<FIRRTLType>()
+                         .getPassiveType()
+                         .dyn_cast_or_null<BundleType>())
+      for (auto elem : bType.getElements())
+        if (elem.name.getValue().contains("mask") &&
+            elem.type.cast<FIRRTLType>().isGround())
+          maskSize = elem.type.cast<FIRRTLType>().getBitWidthOrSentinel();
+
+    // Check that the port type matches the kind that we determined
+    // for this port.  This catches situations of extraneous port
+    // fields beind included or the fields being named incorrectly.
+    FIRRTLType expectedType = FlipType::get(
+        mem.getTypeForPort(mem.depth(), dataType, portKind, maskSize));
     if (originalType != expectedType) {
       StringRef portKindName;
       switch (portKind) {
@@ -1018,7 +1027,7 @@ static LogicalResult verifyMemOp(MemOp mem) {
 }
 
 BundleType MemOp::getTypeForPort(uint64_t depth, FIRRTLType dataType,
-                                 PortKind portKind) {
+                                 PortKind portKind, size_t maskSize) {
 
   auto *context = dataType.getContext();
 
@@ -1042,14 +1051,18 @@ BundleType MemOp::getTypeForPort(uint64_t depth, FIRRTLType dataType,
 
   case PortKind::Write:
     portFields.push_back({getId("data"), dataType});
-    portFields.push_back({getId("mask"), dataType.getMaskType()});
+    portFields.push_back({getId("mask"), maskSize
+                                             ? UIntType::get(context, maskSize)
+                                             : dataType.getMaskType()});
     break;
 
   case PortKind::ReadWrite:
     portFields.push_back({getId("wmode"), UIntType::get(context, 1)});
     portFields.push_back({getId("rdata"), FlipType::get(dataType)});
     portFields.push_back({getId("wdata"), dataType});
-    portFields.push_back({getId("wmask"), dataType.getMaskType()});
+    portFields.push_back({getId("wmask"), maskSize
+                                              ? UIntType::get(context, maskSize)
+                                              : dataType.getMaskType()});
     break;
   }
 
@@ -1109,6 +1122,22 @@ FIRRTLType MemOp::getDataType() {
 
   return firstPortType.getPassiveType().cast<BundleType>().getElementType(
       dataFieldName);
+}
+
+/// Return the mask-size of the memory.
+uint64_t MemOp::getMaskSize() {
+  assert(getNumResults() != 0 && "Mems with no read/write ports are illegal");
+
+  auto firstPortType = getResult(0).getType().cast<FIRRTLType>();
+
+  StringRef dataFieldName = "mask";
+  if (getMemPortKindFromType(firstPortType) == PortKind::ReadWrite)
+    dataFieldName = "wmask";
+
+  if (auto bType = firstPortType.getPassiveType().dyn_cast<BundleType>())
+    if (auto maskField = bType.getElement(dataFieldName))
+      return maskField.getValue().type.getBitWidthOrSentinel();
+  return 1;
 }
 
 StringAttr MemOp::getPortName(size_t resultNo) {

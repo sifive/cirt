@@ -20,6 +20,7 @@
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Parallel.h"
 #include <algorithm>
 
@@ -488,6 +489,18 @@ void TypeLoweringVisitor::visitDecl(MemOp op) {
 
   SmallVector<FlatBundleFieldEntry, 8> fieldTypes;
   flattenType(type, "", false, fieldTypes);
+  size_t mergedBitwidth = 0;
+  std::string fieldSuffix;
+  size_t maskSize = fieldTypes.size() == 1 ? 1 : 0;
+  for (auto fT : fieldTypes) {
+    auto bits = fT.type.getBitWidthOrSentinel();
+    if (maskSize == 0)
+      maskSize = bits;
+    else
+      maskSize = llvm::GreatestCommonDivisor64(maskSize, bits);
+    mergedBitwidth += bits;
+  }
+  auto fieldType = UIntType::get(context, mergedBitwidth);
 
   // Mutable store of the types of the ports of a new memory. This is
   // cleared and re-used.
@@ -507,137 +520,204 @@ void TypeLoweringVisitor::visitDecl(MemOp op) {
   // wires are re-used if they already exist.
   llvm::StringMap<Value> newWires;
 
-  // Loop over the leaf aggregates.
-  for (auto field : fieldTypes) {
+  // Determine the new port type for this memory. New ports are
+  // constructed by checking the kind of the memory.
+  resultPortTypes.clear();
+  resultPortNames.clear();
+  for (size_t i = 0, e = op.getNumResults(); i != e; ++i) {
+    auto kind = op.getPortKind(i);
+    auto name = op.getPortName(i);
 
-    // Determine the new port type for this memory. New ports are
-    // constructed by checking the kind of the memory.
-    resultPortTypes.clear();
-    resultPortNames.clear();
-    for (size_t i = 0, e = op.getNumResults(); i != e; ++i) {
-      auto kind = op.getPortKind(i);
-      auto name = op.getPortName(i);
+    // Any read or write ports are just added.
+    if (kind != MemOp::PortKind::ReadWrite) {
+      resultPortTypes.push_back(
+          FlipType::get(op.getTypeForPort(depth, fieldType, kind, maskSize)));
+      uniquePortName(name.getValue());
+      continue;
+    }
 
-      // Any read or write ports are just added.
-      if (kind != MemOp::PortKind::ReadWrite) {
-        resultPortTypes.push_back(
-            FlipType::get(op.getTypeForPort(depth, field.type, kind)));
-        uniquePortName(name.getValue());
+    // Any readwrite ports are lowered to 1x read and 1x write.
+    resultPortTypes.push_back(FlipType::get(
+        op.getTypeForPort(depth, fieldType, MemOp::PortKind::Read, maskSize)));
+    resultPortTypes.push_back(FlipType::get(
+        op.getTypeForPort(depth, fieldType, MemOp::PortKind::Write, maskSize)));
+
+    auto nameStr = name.getValue().str();
+    uniquePortName(nameStr + "_r");
+    uniquePortName(nameStr + "_w");
+  }
+
+  // Construct the new memory for this flattened field.
+  //
+  // TODO: Annotations are just copied to the lowered memory.
+  // Change this to copy all global annotations and only those which
+  // target specific ports.
+  auto newName = op.name().str() + fieldSuffix;
+  auto newMem = builder->create<MemOp>(
+      resultPortTypes, op.readLatencyAttr(), op.writeLatencyAttr(),
+      op.depthAttr(), op.ruwAttr(),
+      builder->getArrayAttr(resultPortNames.getArrayRef()),
+      builder->getStringAttr(newName), op.annotations());
+
+  SmallVector<Value, 4> tempMaskBits;
+  // Setup the lowering to the new memory. We need to track both the
+  // new memory index ("i") and the old memory index ("j") to deal
+  // with the situation where readwrite ports have been split into
+  // separate ports.
+  for (size_t i = 0, j = 0, e = newMem.getNumResults(); i != e; ++i, ++j) {
+
+    BundleType underlying = newMem.getResult(i)
+                                .getType()
+                                .cast<FIRRTLType>()
+                                .getPassiveType()
+                                .cast<BundleType>();
+
+    auto kind = newMem.getPortKind(newMem.getPortName(i).getValue());
+    auto oldKind = op.getPortKind(op.getPortName(j).getValue());
+
+    auto skip =
+        kind == MemOp::PortKind::Write && oldKind == MemOp::PortKind::ReadWrite;
+
+    // Loop over all elements in the port. Because readwrite ports
+    // have been split, this only needs to deal with the fields of
+    // read or write ports. If the port is replacing a readwrite
+    // port, then this is linked against the old field.
+    for (auto elt : underlying.getElements()) {
+
+      auto oldName = elt.name.getValue();
+      if (oldKind == MemOp::PortKind::ReadWrite) {
+        if (oldName == "mask")
+          oldName = "wmask";
+        if (oldName == "data" && kind == MemOp::PortKind::Read)
+          oldName = "rdata";
+        if (oldName == "data" && kind == MemOp::PortKind::Write)
+          oldName = "wdata";
+      }
+
+      auto getWire = [&](FIRRTLType type,
+                         const std::string &wireName) -> Value {
+        auto wire = newWires[wireName];
+        if (!wire) {
+          wire = builder->create<WireOp>(type.getPassiveType(),
+                                         newMem.name().str() + "_" + wireName);
+          newWires[wireName] = wire;
+        }
+        return wire;
+      };
+
+      // These ports ("addr", "clk", "en") require special
+      // handling. When these are lowered, they result in multiple
+      // new connections. E.g., an assignment to a clock needs to be
+      // split into an assignment to all clocks. This is handled by
+      // creating a dummy wire, setting the dummy wire as the
+      // lowering target, and then connecting every new port
+      // subfield to that.
+      if (oldName == "clk" || oldName == "en" || oldName == "addr") {
+        FIRRTLType theType = elt.type.getPassiveType();
+
+        // Construct a new wire if needed.
+        auto wireName =
+            (op.getPortName(j).getValue().str() + "_" + oldName).str();
+        auto wire = getWire(theType, wireName);
+
+        if (!(oldKind == MemOp::PortKind::ReadWrite &&
+              kind == MemOp::PortKind::Write))
+          setBundleLowering(op.getResult(j), oldName, wire);
+
+        // Handle "en" specially if this used to be a readwrite port.
+        if (oldKind == MemOp::PortKind::ReadWrite && oldName == "en") {
+          auto wmode =
+              getWire(theType, op.getPortName(j).getValue().str() + "_wmode");
+          if (!skip)
+            setBundleLowering(op.getResult(j), "wmode", wmode);
+          Value gate;
+          if (kind == MemOp::PortKind::Read)
+            gate = builder->create<NotPrimOp>(wmode.getType(), wmode);
+          else
+            gate = wmode;
+          wire = builder->create<AndPrimOp>(wire.getType(), wire, gate);
+        }
+
+        builder->create<ConnectOp>(
+            builder->create<SubfieldOp>(theType, newMem.getResult(i), elt.name),
+            wire);
         continue;
       }
 
-      // Any readwrite ports are lowered to 1x read and 1x write.
-      resultPortTypes.push_back(FlipType::get(
-          op.getTypeForPort(depth, field.type, MemOp::PortKind::Read)));
-      resultPortTypes.push_back(FlipType::get(
-          op.getTypeForPort(depth, field.type, MemOp::PortKind::Write)));
+      // Data ports ("data", "mask") are trivially lowered because
+      // each data leaf winds up in a new, separate memory. No wire
+      // creation is needed.
+      FIRRTLType theType = elt.type.getPassiveType();
 
-      auto nameStr = name.getValue().str();
-      uniquePortName(nameStr + "_r");
-      uniquePortName(nameStr + "_w");
-    }
+      if ((oldName.contains("data") || oldName.contains("mask")) &&
+          fieldTypes.size() > 1) {
 
-    // Construct the new memory for this flattened field.
-    //
-    // TODO: Annotations are just copied to the lowered memory.
-    // Change this to copy all global annotations and only those which
-    // target specific ports.
-    auto newName = op.name().str() + field.suffix;
-    auto newMem = builder->create<MemOp>(
-        resultPortTypes, op.readLatencyAttr(), op.writeLatencyAttr(),
-        op.depthAttr(), op.ruwAttr(),
-        builder->getArrayAttr(resultPortNames.getArrayRef()),
-        builder->getStringAttr(newName), op.annotations());
+        unsigned loBit = 0;
+        auto memSF =
+            builder->create<SubfieldOp>(theType, newMem.getResult(i), elt.name);
+        WireOp writerTempWire;
+        if (kind == MemOp::PortKind::Write && oldName.contains("data")) {
+          writerTempWire = builder->create<WireOp>(fieldType);
+          builder->create<ConnectOp>(memSF, writerTempWire);
+        } else if (oldName.contains("mask")) {
+          writerTempWire =
+              builder->create<WireOp>(UIntType::get(context, maskSize));
+          builder->create<ConnectOp>(memSF, writerTempWire);
+        }
+        SmallVector<WireOp, 4> tempCatWires;
+        for (auto field : fieldTypes) {
+          if (oldName.contains("mask")) {
+            auto tempMaskWire =
+                builder->create<WireOp>(UIntType::get(context, 1));
+            setBundleLowering(op.getResult(j), (oldName + field.suffix).str(),
+                              tempMaskWire);
+            auto numBitsReq = field.type.getBitWidthOrSentinel() / maskSize;
+            APInt constOne(numBitsReq, 1, false);
+            APInt constZero(numBitsReq, 0, false);
+            auto maskMux = builder->create<MuxPrimOp>(
+                tempMaskWire,
+                builder->create<ConstantOp>(UIntType::get(context, numBitsReq),
+                                            constOne),
+                builder->create<ConstantOp>(UIntType::get(context, numBitsReq),
+                                            constZero));
+            tempMaskBits.push_back(maskMux);
+          } else {
+            unsigned hiBit = loBit + field.type.getBitWidthOrSentinel() - 1;
+            auto fType =
+                UIntType::get(context, field.type.getBitWidthOrSentinel());
 
-    // Setup the lowering to the new memory. We need to track both the
-    // new memory index ("i") and the old memory index ("j") to deal
-    // with the situation where readwrite ports have been split into
-    // separate ports.
-    for (size_t i = 0, j = 0, e = newMem.getNumResults(); i != e; ++i, ++j) {
+            if (kind == MemOp::PortKind::Write) {
+              auto f1 = builder->create<WireOp>(
+                  fType, "_mem_writer_" + (oldName + field.suffix).str());
+              tempCatWires.push_back(f1);
+              setBundleLowering(op.getResult(j), (oldName + field.suffix).str(),
+                                f1);
 
-      BundleType underlying = newMem.getResult(i)
-                                  .getType()
-                                  .cast<FIRRTLType>()
-                                  .getPassiveType()
-                                  .cast<BundleType>();
-
-      auto kind = newMem.getPortKind(newMem.getPortName(i).getValue());
-      auto oldKind = op.getPortKind(op.getPortName(j).getValue());
-
-      auto skip = kind == MemOp::PortKind::Write &&
-                  oldKind == MemOp::PortKind::ReadWrite;
-
-      // Loop over all elements in the port. Because readwrite ports
-      // have been split, this only needs to deal with the fields of
-      // read or write ports. If the port is replacing a readwrite
-      // port, then this is linked against the old field.
-      for (auto elt : underlying.getElements()) {
-
-        auto oldName = elt.name.getValue();
-        if (oldKind == MemOp::PortKind::ReadWrite) {
-          if (oldName == "mask")
-            oldName = "wmask";
-          if (oldName == "data" && kind == MemOp::PortKind::Read)
-            oldName = "rdata";
-          if (oldName == "data" && kind == MemOp::PortKind::Write)
-            oldName = "wdata";
+            } else {
+              setBundleLowering(
+                  op.getResult(j), (oldName + field.suffix).str(),
+                  builder->create<BitsPrimOp>(fType, memSF, hiBit, loBit));
+            }
+            loBit = hiBit + 1;
+          }
         }
 
-        auto getWire = [&](FIRRTLType type,
-                           const std::string &wireName) -> Value {
-          auto wire = newWires[wireName];
-          if (!wire) {
-            wire = builder->create<WireOp>(
-                type.getPassiveType(), newMem.name().str() + "_" + wireName);
-            newWires[wireName] = wire;
-          }
-          return wire;
-        };
+        if (tempMaskBits.size()) {
+          Value catOp0 = tempMaskBits[0];
+          for (size_t i = 1, e = tempMaskBits.size(); i != e; ++i)
+            catOp0 = builder->create<CatPrimOp>(catOp0, tempMaskBits[i]);
+          builder->create<ConnectOp>(writerTempWire, catOp0);
+        } else if (tempCatWires.size()) {
+          Value tempWire1 = tempCatWires[0];
+          for (size_t i = 1, e = tempCatWires.size(); i != e; ++i)
+            tempWire1 = builder->create<CatPrimOp>(tempWire1, tempCatWires[i]);
 
-        // These ports ("addr", "clk", "en") require special
-        // handling. When these are lowered, they result in multiple
-        // new connections. E.g., an assignment to a clock needs to be
-        // split into an assignment to all clocks. This is handled by
-        // creating a dummy wire, setting the dummy wire as the
-        // lowering target, and then connecting every new port
-        // subfield to that.
-        if (oldName == "clk" || oldName == "en" || oldName == "addr") {
-          FIRRTLType theType = elt.type.getPassiveType();
-
-          // Construct a new wire if needed.
-          auto wireName =
-              (op.getPortName(j).getValue().str() + "_" + oldName).str();
-          auto wire = getWire(theType, wireName);
-
-          if (!(oldKind == MemOp::PortKind::ReadWrite &&
-                kind == MemOp::PortKind::Write))
-            setBundleLowering(op.getResult(j), oldName, wire);
-
-          // Handle "en" specially if this used to be a readwrite port.
-          if (oldKind == MemOp::PortKind::ReadWrite && oldName == "en") {
-            auto wmode =
-                getWire(theType, op.getPortName(j).getValue().str() + "_wmode");
-            if (!skip)
-              setBundleLowering(op.getResult(j), "wmode", wmode);
-            Value gate;
-            if (kind == MemOp::PortKind::Read)
-              gate = builder->create<NotPrimOp>(wmode);
-            else
-              gate = wmode;
-            wire = builder->create<AndPrimOp>(wire, gate);
-          }
-
-          builder->create<ConnectOp>(
-              builder->create<SubfieldOp>(newMem.getResult(i), elt.name), wire);
-          continue;
+          builder->create<ConnectOp>(writerTempWire, tempWire1);
         }
-
-        // Data ports ("data", "mask") are trivially lowered because
-        // each data leaf winds up in a new, separate memory. No wire
-        // creation is needed.
-        setBundleLowering(
-            op.getResult(j), (oldName + field.suffix).str(),
-            builder->create<SubfieldOp>(newMem.getResult(i), elt.name));
+      } else {
+        setBundleLowering(op.getResult(j), (oldName + fieldSuffix).str(),
+                          builder->create<SubfieldOp>(
+                              theType, newMem.getResult(i), elt.name));
       }
 
       // Don't increment the index of the old memory if this is the

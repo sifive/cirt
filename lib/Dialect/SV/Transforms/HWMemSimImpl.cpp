@@ -133,7 +133,11 @@ void HWMemSimImplPass::generateMemory(hw::HWModuleOp op, FirMemory mem) {
                   ICmpPredicate::eq, wmode,
                   b.createOrFold<hw::ConstantOp>(wmode.getType(), 0)));
       auto wcond = b.createOrFold<comb::AndOp>(
-          en, b.createOrFold<comb::AndOp>(wmask, wmode));
+          en, b.createOrFold<comb::AndOp>(
+                  b.createOrFold<comb::ICmpOp>(
+                      ICmpPredicate::eq, wmask,
+                      b.createOrFold<hw::ConstantOp>(wmask.getType(), 1)),
+                  wmode));
 
       b.create<sv::PAssignOp>(rWire, b.create<sv::ConstantXOp>(dataType));
       b.create<sv::IfOp>(
@@ -162,7 +166,10 @@ void HWMemSimImplPass::generateMemory(hw::HWModuleOp op, FirMemory mem) {
 
     // Write logic
     b.create<sv::AlwaysFFOp>(sv::EventControl::AtPosEdge, clock, [&]() {
-      auto wcond = b.createOrFold<comb::AndOp>(en, wmask);
+      auto wcond = b.createOrFold<comb::AndOp>(
+          en, b.createOrFold<comb::ICmpOp>(
+                  ICmpPredicate::eq, wmask,
+                  b.createOrFold<hw::ConstantOp>(wmask.getType(), 1)));
       b.create<sv::IfOp>(wcond, [&]() {
         auto slot = b.create<sv::ArrayIndexInOutOp>(reg, addr);
         b.create<sv::PAssignOp>(slot, wdata);

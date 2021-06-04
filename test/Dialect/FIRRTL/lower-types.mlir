@@ -157,10 +157,10 @@ firrtl.circuit "Foo" {
 // COM:     memory.w.mask <= wMask
 // COM:     memory.w.data <= wData
 
-firrtl.circuit "Foo" {
+firrtl.circuit "FooBundle" {
 
-  // CHECK-LABEL: firrtl.module @Foo
-  firrtl.module @Foo(in %clock: !firrtl.clock, in %rAddr: !firrtl.uint<4>, in %rEn: !firrtl.uint<1>, out %rData: !firrtl.bundle<a: uint<8>, b: uint<8>>, in %wAddr: !firrtl.uint<4>, in %wEn: !firrtl.uint<1>, in %wMask: !firrtl.bundle<a: uint<1>, b: uint<1>>, in %wData: !firrtl.bundle<a: uint<8>, b: uint<8>>) {
+  // CHECK-LABEL: firrtl.module @FooBundle
+  firrtl.module @FooBundle(in %clock: !firrtl.clock, in %rAddr: !firrtl.uint<4>, in %rEn: !firrtl.uint<1>, out %rData: !firrtl.bundle<a: uint<8>, b: uint<8>>, in %wAddr: !firrtl.uint<4>, in %wEn: !firrtl.uint<1>, in %wMask: !firrtl.bundle<a: uint<1>, b: uint<1>>, in %wData: !firrtl.bundle<a: uint<8>, b: uint<8>>) {
     %memory_r, %memory_w = firrtl.mem Undefined {depth = 16 : i64, name = "memory", portNames = ["r", "w"], readLatency = 0 : i32, writeLatency = 1 : i32} : !firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<bundle<a: uint<8>, b: uint<8>>>>>, !firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: bundle<a: uint<8>, b: uint<8>>, mask: bundle<a: uint<1>, b: uint<1>>>>
     %0 = firrtl.subfield %memory_r("clk") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<bundle<a: uint<8>, b: uint<8>>>>>) -> !firrtl.clock
     firrtl.connect %0, %clock : !firrtl.clock, !firrtl.clock
@@ -182,57 +182,52 @@ firrtl.circuit "Foo" {
     firrtl.connect %8, %wData : !firrtl.bundle<a: uint<8>, b: uint<8>>, !firrtl.bundle<a: uint<8>, b: uint<8>>
 
     // COM: ---------------------------------------------------------------------------------
-    // COM: Split memory "a" should exist
-    // CHECK: %[[MEMORY_A_R:.+]], %[[MEMORY_A_W:.+]] = firrtl.mem {{.+}} data: uint<8>, mask: uint<1>
+    // CHECK: %[[MEMORY_R:.+]], %[[MEMORY_W:.+]] = firrtl.mem {{.+}} data: uint<16>, mask: uint<8>
     // COM: ---------------------------------------------------------------------------------
     // COM: Read port
-    // CHECK-DAG: %[[MEMORY_A_R_ADDR:.+]] = firrtl.subfield %[[MEMORY_A_R]]("addr")
+    // CHECK-DAG: %[[MEMORY_A_R_ADDR:.+]] = firrtl.subfield %[[MEMORY_R]]("addr")
     // CHECK-DAG: %[[MEMORY_R_ADDR:.+]] = firrtl.wire
     // CHECK: firrtl.connect %[[MEMORY_A_R_ADDR]], %[[MEMORY_R_ADDR]]
-    // CHECK-DAG: %[[MEMORY_A_R_EN:.+]] = firrtl.subfield %[[MEMORY_A_R]]("en")
+    // CHECK-DAG: %[[MEMORY_A_R_EN:.+]] = firrtl.subfield %[[MEMORY_R]]("en")
     // CHECK-DAG: %[[MEMORY_R_EN:.+]] = firrtl.wire
     // CHECK: firrtl.connect %[[MEMORY_A_R_EN]], %[[MEMORY_R_EN]]
-    // CHECK-DAG: %[[MEMORY_A_R_CLK:.+]] = firrtl.subfield %[[MEMORY_A_R]]("clk")
+    // CHECK-DAG: %[[MEMORY_A_R_CLK:.+]] = firrtl.subfield %[[MEMORY_R]]("clk")
     // CHECK-DAG: %[[MEMORY_R_CLK:.+]] = firrtl.wire
     // CHECK: firrtl.connect %[[MEMORY_A_R_CLK]], %[[MEMORY_R_CLK]]
-    // CHECK: %[[MEMORY_A_R_DATA:.+]] = firrtl.subfield %[[MEMORY_A_R]]("data")
+    // CHECK: %[[MEMORY_R_DATA:.+]] = firrtl.subfield %[[MEMORY_R]]("data")
+    // CHECK: %[[MEMORY_A_R_DATA:.+]] = firrtl.bits %[[MEMORY_R_DATA]] 7 to 0 
+    // CHECK: %[[MEMORY_B_R_DATA:.+]] = firrtl.bits %[[MEMORY_R_DATA]] 15 to 8
     // COM: ---------------------------------------------------------------------------------
     // COM: Write Port
-    // CHECK-DAG: %[[MEMORY_A_W_ADDR:.+]] = firrtl.subfield %[[MEMORY_A_W]]("addr")
+    // CHECK-DAG: %[[MEMORY_A_W_ADDR:.+]] = firrtl.subfield %[[MEMORY_W]]("addr")
     // CHECK-DAG: %[[MEMORY_W_ADDR:.+]] = firrtl.wire
     // CHECK: firrtl.connect %[[MEMORY_A_W_ADDR]], %[[MEMORY_W_ADDR]]
-    // CHECK-DAG: %[[MEMORY_A_W_EN:.+]] = firrtl.subfield %[[MEMORY_A_W]]("en")
+    // CHECK-DAG: %[[MEMORY_A_W_EN:.+]] = firrtl.subfield %[[MEMORY_W]]("en")
     // CHECK-DAG: %[[MEMORY_W_EN:.+]] = firrtl.wire
     // CHECK: firrtl.connect %[[MEMORY_A_W_EN]], %[[MEMORY_W_EN]]
-    // CHECK-DAG: %[[MEMORY_A_W_CLK:.+]] = firrtl.subfield %[[MEMORY_A_W]]("clk")
+    // CHECK-DAG: %[[MEMORY_A_W_CLK:.+]] = firrtl.subfield %[[MEMORY_W]]("clk")
     // CHECK-DAG: %[[MEMORY_W_CLK:.+]] = firrtl.wire
     // CHECK: firrtl.connect %[[MEMORY_A_W_CLK]], %[[MEMORY_W_CLK]]
-    // CHECK: %[[MEMORY_A_W_DATA:.+]] = firrtl.subfield %[[MEMORY_A_W]]("data")
-    // CHECK: %[[MEMORY_A_W_MASK:.+]] = firrtl.subfield %[[MEMORY_A_W]]("mask")
-    // COM: ---------------------------------------------------------------------------------
-    // COM: Split memory "b" should exist
-    // CHECK: %[[MEMORY_B_R:.+]], %[[MEMORY_B_W:.+]] = firrtl.mem {{.+}} data: uint<8>, mask: uint<1>
-    // COM: ---------------------------------------------------------------------------------
-    // COM: Read port
-    // CHECK: %[[MEMORY_B_R_ADDR:.+]] = firrtl.subfield %[[MEMORY_B_R]]("addr")
-    // CHECK: firrtl.connect %[[MEMORY_B_R_ADDR]], %[[MEMORY_R_ADDR]]
-    // CHECK: %[[MEMORY_B_R_EN:.+]] = firrtl.subfield %[[MEMORY_B_R]]("en")
-    // CHECK: firrtl.connect %[[MEMORY_B_R_EN]], %[[MEMORY_R_EN]]
-    // CHECK: %[[MEMORY_B_R_CLK:.+]] = firrtl.subfield %[[MEMORY_B_R]]("clk")
-    // CHECK: firrtl.connect %[[MEMORY_B_R_CLK]], %[[MEMORY_R_CLK]]
-    // CHECK: %[[MEMORY_B_R_DATA:.+]] = firrtl.subfield %[[MEMORY_B_R]]("data")
-    // COM: ---------------------------------------------------------------------------------
-    // COM: Write port
-    // CHECK: %[[MEMORY_B_W_ADDR:.+]] = firrtl.subfield %[[MEMORY_B_W]]("addr")
-    // CHECK: firrtl.connect %[[MEMORY_B_W_ADDR]], %[[MEMORY_W_ADDR]]
-    // CHECK: %[[MEMORY_B_W_EN:.+]] = firrtl.subfield %[[MEMORY_B_W]]("en")
-    // CHECK: firrtl.connect %[[MEMORY_B_W_EN]], %[[MEMORY_W_EN]]
-    // CHECK: %[[MEMORY_B_W_CLK:.+]] = firrtl.subfield %[[MEMORY_B_W]]("clk")
-    // CHECK: firrtl.connect %[[MEMORY_B_W_CLK]], %[[MEMORY_W_CLK]]
-    // CHECK: %[[MEMORY_B_W_DATA:.+]] = firrtl.subfield %[[MEMORY_B_W]]("data")
-    // CHECK: %[[MEMORY_B_W_MASK:.+]] = firrtl.subfield %[[MEMORY_B_W]]("mask")
-    // COM: ---------------------------------------------------------------------------------
-    // COM: Connections to module ports
+    // CHECK: %[[MEMORY_W_DATA:.+]] = firrtl.subfield %[[MEMORY_W]]("data")
+    // CHECK:  %[[TWIRE1:.+]] = firrtl.wire  : !firrtl.uint<16>
+    // CHECK:  firrtl.connect %[[MEMORY_W_DATA]], %[[TWIRE1:.+]]
+    // CHECK:  %[[WRITER_DATA_A:.+]] = firrtl.wire  : !firrtl.uint<8>
+    // CHECK:  %[[WRITER_DATA_B:.+]] = firrtl.wire  : !firrtl.uint<8>
+    // CHECK:  %[[WRITERCAT:.+]] = firrtl.cat %[[WRITER_DATA_A]], %[[WRITER_DATA_B]]
+    // CHECK:  firrtl.connect %[[TWIRE1:.+]], %[[WRITERCAT]]
+    // CHECK:  %[[MEMORY_W_MASK:.+]] = firrtl.subfield %[[MEMORY_W]]("mask")
+    // CHECK:  %[[TEMPWIRE2:.+]] = firrtl.wire  : !firrtl.uint<8>
+    // CHECK:  firrtl.connect %[[MEMORY_W_MASK]], %[[TEMPWIRE2]]
+    // CHECK:  %[[TEMPWIRE3:.+]] = firrtl.wire
+    // CHECK-DAG:  %[[CONST10:.+]] = firrtl.constant 0
+    // CHECK-DAG:  %[[CONST11:.+]] = firrtl.constant 1
+    // CHECK:  %[[MUX1:.+]] = firrtl.mux(%[[TEMPWIRE3:.+]], %[[CONST11]], %[[CONST10]])
+    // CHECK:  %[[TEMPWIRE4:.+]] = firrtl.wire
+    // CHECK-DAG:  %[[CONST21:.+]] = firrtl.constant 1
+    // CHECK-DAG:  %[[CONST20:.+]] = firrtl.constant 0
+    // CHECK:  %[[MUX2:.+]] = firrtl.mux(%[[TEMPWIRE4]], %[[CONST21]], %[[CONST20]])
+    // CHECK:  %[[MUXCAT:.+]] = firrtl.cat %[[MUX1]], %[[MUX2]]
+    // CHECK: firrtl.connect %[[TEMPWIRE2]], %[[MUXCAT]]
     // CHECK: firrtl.connect %[[MEMORY_R_CLK]], %clock
     // CHECK: firrtl.connect %[[MEMORY_R_EN]], %rEn
     // CHECK: firrtl.connect %[[MEMORY_R_ADDR]], %rAddr
@@ -241,10 +236,10 @@ firrtl.circuit "Foo" {
     // CHECK: firrtl.connect %[[MEMORY_W_CLK]], %clock
     // CHECK: firrtl.connect %[[MEMORY_W_EN]], %wEn
     // CHECK: firrtl.connect %[[MEMORY_W_ADDR]], %wAddr
-    // CHECK: firrtl.connect %[[MEMORY_A_W_MASK]], %wMask_a
-    // CHECK: firrtl.connect %[[MEMORY_B_W_MASK]], %wMask_b
-    // CHECK: firrtl.connect %[[MEMORY_A_W_DATA]], %wData_a
-    // CHECK: firrtl.connect %[[MEMORY_B_W_DATA]], %wData_b
+    // CHECK: firrtl.connect %[[TEMPWIRE3]], %wMask_a
+    // CHECK: firrtl.connect %[[TEMPWIRE4]], %wMask_b
+    // CHECK: firrtl.connect %[[WRITER_DATA_A]], %wData_a
+    // CHECK: firrtl.connect %[[WRITER_DATA_B]], %wData_b
 
   }
 }
@@ -663,8 +658,6 @@ firrtl.circuit "AnnotationsMemOp" {
   }
   // CHECK: firrtl.mem
   // CHECK-SAME: annotations = [{a = "a"}]
-  // CHECK: firrtl.mem
-  // CHECK-SAME: annotations = [{a = "a"}]
 }
 
 // -----
@@ -971,5 +964,40 @@ module  {
     // CHECK-COUNT-2: firrtl.world
     // CHECK-NOT: firrtl.annotations
     // CHECK-NOT: firrtl.world
+  }
+}
+
+// -----
+
+// Test lowering of bundle data type in memory
+firrtl.circuit "lowerMemoryBundle"  {
+  firrtl.module @lowerMemoryBundle(in %clock: !firrtl.clock, in %rAddr: !firrtl.uint<4>, in %rEn: !firrtl.uint<1>, out %rData: !firrtl.bundle<a: uint<3>, b: uint<5>>, in %wAddr: !firrtl.vector<uint<4>, 2>, in %wEn: !firrtl.vector<uint<1>, 2>, in %wMask: !firrtl.vector<uint<1>, 2>, in %wData: !firrtl.vector<uint<8>, 2>) {
+    %memory_r = firrtl.mem Undefined  {depth = 16 : i64, name = "memory", portNames = ["r"], readLatency = 0 : i32, writeLatency = 1 : i32} : !firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<bundle<a: uint<3>, b: uint<5>>>>>
+    %0 = firrtl.subfield %memory_r("clk") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<bundle<a: uint<3>, b: uint<5>>>>>) -> !firrtl.clock
+    firrtl.connect %0, %clock : !firrtl.clock, !firrtl.clock
+    %1 = firrtl.subfield %memory_r("en") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<bundle<a: uint<3>, b: uint<5>>>>>) -> !firrtl.uint<1>
+    firrtl.connect %1, %rEn : !firrtl.uint<1>, !firrtl.uint<1>
+    %2 = firrtl.subfield %memory_r("addr") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<bundle<a: uint<3>, b: uint<5>>>>>) -> !firrtl.uint<4>
+    firrtl.connect %2, %rAddr : !firrtl.uint<4>, !firrtl.uint<4>
+    %3 = firrtl.subfield %memory_r("data") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<bundle<a: uint<3>, b: uint<5>>>>>) -> !firrtl.bundle<a: uint<3>, b: uint<5>>
+    firrtl.connect %rData, %3 : !firrtl.bundle<a: uint<3>, b: uint<5>>, !firrtl.bundle<a: uint<3>, b: uint<5>>
+      // CHECK: %memory_r = firrtl.mem Undefined  {depth = 16 : i64, name = "memory", portNames = ["r"], readLatency = 0 : i32, writeLatency = 1 : i32} : !firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<uint<8>>>>
+      // CHECK: %memory_r_addr = firrtl.wire  : !firrtl.uint<4>
+      // CHECK: %0 = firrtl.subfield %memory_r("addr") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<uint<8>>>>) -> !firrtl.uint<4>
+      // CHECK: firrtl.connect %0, %memory_r_addr : !firrtl.uint<4>, !firrtl.uint<4>
+      // CHECK: %memory_r_en = firrtl.wire  : !firrtl.uint<1>
+      // CHECK: %1 = firrtl.subfield %memory_r("en") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<uint<8>>>>) -> !firrtl.uint<1>
+      // CHECK: firrtl.connect %1, %memory_r_en : !firrtl.uint<1>, !firrtl.uint<1>
+      // CHECK: %memory_r_clk = firrtl.wire  : !firrtl.clock
+      // CHECK: %2 = firrtl.subfield %memory_r("clk") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<uint<8>>>>) -> !firrtl.clock
+      // CHECK: firrtl.connect %2, %memory_r_clk : !firrtl.clock, !firrtl.clock
+      // CHECK: %3 = firrtl.subfield %memory_r("data") : (!firrtl.flip<bundle<addr: uint<4>, en: uint<1>, clk: clock, data: flip<uint<8>>>>) -> !firrtl.uint<8>
+      // CHECK: %4 = firrtl.bits %3 2 to 0 : (!firrtl.uint<8>) -> !firrtl.uint<3>
+      // CHECK: %5 = firrtl.bits %3 7 to 3 : (!firrtl.uint<8>) -> !firrtl.uint<5>
+      // CHECK: firrtl.connect %memory_r_clk, %clock : !firrtl.clock, !firrtl.clock
+      // CHECK: firrtl.connect %memory_r_en, %rEn : !firrtl.uint<1>, !firrtl.uint<1>
+      // CHECK: firrtl.connect %memory_r_addr, %rAddr : !firrtl.uint<4>, !firrtl.uint<4>
+      // CHECK: firrtl.connect %rData_a, %4 : !firrtl.uint<3>, !firrtl.uint<3>
+      // CHECK: firrtl.connect %rData_b, %5 : !firrtl.uint<5>, !firrtl.uint<5>
   }
 }

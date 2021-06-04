@@ -111,6 +111,7 @@ struct FirMemory {
   size_t numWritePorts;
   size_t numReadWritePorts;
   size_t dataWidth;
+  size_t maskSize;
   size_t depth;
   size_t readLatency;
   size_t writeLatency;
@@ -125,6 +126,7 @@ struct FirMemory {
     cmp3way(numWritePorts);
     cmp3way(numReadWritePorts);
     cmp3way(dataWidth);
+    cmp3way(maskSize);
     cmp3way(depth);
     cmp3way(readLatency);
     cmp3way(writeLatency);
@@ -137,7 +139,8 @@ struct FirMemory {
            numWritePorts == rhs.numWritePorts &&
            numReadWritePorts == rhs.numReadWritePorts &&
            dataWidth == rhs.dataWidth && depth == rhs.depth &&
-           readLatency == rhs.readLatency && writeLatency == rhs.writeLatency &&
+           dataWidth == rhs.dataWidth && readLatency == rhs.readLatency &&
+           writeLatency == rhs.writeLatency &&
            readUnderWrite == rhs.readUnderWrite;
   }
 };
@@ -170,8 +173,9 @@ static FirMemory analyzeMemOp(MemOp op) {
     width = 0;
   }
 
-  return {numReadPorts, numWritePorts,    numReadWritePorts, (size_t)width,
-          op.depth(),   op.readLatency(), op.writeLatency(), (size_t)op.ruw()};
+  return {numReadPorts,     numWritePorts,     numReadWritePorts,
+          (size_t)width,    op.getMaskSize(),  op.depth(),
+          op.readLatency(), op.writeLatency(), (size_t)op.ruw()};
 }
 
 static SmallVector<FirMemory> collectFIRRTLMemories(Operation *op) {
@@ -381,6 +385,9 @@ void FIRRTLModuleLowering::lowerMemoryDecls(const SmallVector<FirMemory> &mems,
     Type bAddrType = IntegerType::get(
         &getContext(), std::max(1U, llvm::Log2_64_Ceil(mem.depth)));
 
+    Type bMaskType =
+        IntegerType::get(&getContext(), std::max((size_t)1, mem.maskSize));
+
     for (size_t i = 0; i < mem.numReadPorts; ++i) {
       makePortCommon("ro", Twine(i), bAddrType);
       ports.push_back({b.getStringAttr(("ro_data_" + Twine(i)).str()),
@@ -391,7 +398,7 @@ void FIRRTLModuleLowering::lowerMemoryDecls(const SmallVector<FirMemory> &mems,
       ports.push_back({b.getStringAttr(("rw_wmode_" + Twine(i)).str()),
                        hw::INPUT, b1Type, inputPin++});
       ports.push_back({b.getStringAttr(("rw_wmask_" + Twine(i)).str()),
-                       hw::INPUT, b1Type, inputPin++});
+                       hw::INPUT, bMaskType, inputPin++});
       ports.push_back({b.getStringAttr(("rw_wdata_" + Twine(i)).str()),
                        hw::INPUT, bDataType, inputPin++});
       ports.push_back({b.getStringAttr(("rw_rdata_" + Twine(i)).str()),
@@ -401,7 +408,7 @@ void FIRRTLModuleLowering::lowerMemoryDecls(const SmallVector<FirMemory> &mems,
     for (size_t i = 0; i < mem.numWritePorts; ++i) {
       makePortCommon("wo", Twine(i), bAddrType);
       ports.push_back({b.getStringAttr(("wo_mask_" + Twine(i)).str()),
-                       hw::INPUT, b1Type, inputPin++});
+                       hw::INPUT, bMaskType, inputPin++});
       ports.push_back({b.getStringAttr(("wo_data_" + Twine(i)).str()),
                        hw::INPUT, bDataType, inputPin++});
     }
@@ -1574,9 +1581,9 @@ LogicalResult FIRRTLLowering::visitDecl(WireOp op) {
 
   auto symName = op.nameAttr();
   if (symName) {
-  // Prepend the name of the module to make the symbol name unique in the symbol
-  // table, it is already unique in the module. Checking if the name is unique
-  // in the SymbolTable is non-trivial.
+    // Prepend the name of the module to make the symbol name unique in the
+    // symbol table, it is already unique in the module. Checking if the name is
+    // unique in the SymbolTable is non-trivial.
     auto moduleName =
         cast<hw::HWModuleOp>(op->getParentOp()).getNameAttr().getValue().str();
     symName = builder.getStringAttr("__" + moduleName + "__" +
@@ -1804,14 +1811,14 @@ LogicalResult FIRRTLLowering::visitDecl(MemOp op) {
       addInput(readOperands, "en", 1);
       addInput(readOperands, "addr", llvm::Log2_64_Ceil(memSummary.depth));
       addInput(readOperands, "wmode", 1);
-      addInput(writeOperands, "wmask", 1);
+      addInput(writeOperands, "wmask", memSummary.maskSize);
       addInput(writeOperands, "wdata", memSummary.dataWidth);
       addOutput("rdata", memSummary.dataWidth);
     } else {
       addInput(writeOperands, "clk", 1);
       addInput(writeOperands, "en", 1);
       addInput(writeOperands, "addr", llvm::Log2_64_Ceil(memSummary.depth));
-      addInput(writeOperands, "mask", 1);
+      addInput(writeOperands, "mask", memSummary.maskSize);
       addInput(writeOperands, "data", memSummary.dataWidth);
     }
     ++portKindNum;
