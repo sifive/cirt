@@ -9,6 +9,7 @@
 #include "./PassDetails.h"
 #include "circt/Dialect/FIRRTL/FIRRTLAnnotations.h"
 #include "circt/Dialect/FIRRTL/FIRRTLAttributes.h"
+#include "circt/Dialect/FIRRTL/InstanceGraph.h"
 #include "circt/Dialect/FIRRTL/Passes.h"
 #include "llvm/ADT/TinyPtrVector.h"
 using namespace circt;
@@ -260,12 +261,16 @@ private:
   /// ports.
   DenseMap<BlockArgument, llvm::TinyPtrVector<Value>>
       resultPortToInstanceResultMapping;
+
+  /// The InstanceGraph of the Circuit.
+  InstanceGraph *instanceGraph;
 };
 } // end anonymous namespace
 
 // TODO: handle annotations: [[OptimizableExtModuleAnnotation]]
 void IMConstPropPass::runOnOperation() {
   auto circuit = getOperation();
+  instanceGraph = &getAnalysis<InstanceGraph>();
 
   // If the top level module is an external module, mark the input ports
   // overdefined.
@@ -412,7 +417,8 @@ void IMConstPropPass::markInvalidValueOp(InvalidValueOp invalid) {
 /// enclosing block is marked live.  This sets up the def-use edges for ports.
 void IMConstPropPass::markInstanceOp(InstanceOp instance) {
   // Get the module being reference or a null pointer if this is an extmodule.
-  auto module = dyn_cast<FModuleOp>(instance.getReferencedModule());
+  auto module =
+      dyn_cast<FModuleOp>(instanceGraph->getReferencedModule(instance));
 
   // If this is an extmodule, just remember that any results and inouts are
   // overdefined.
@@ -493,7 +499,8 @@ void IMConstPropPass::visitConnect(ConnectOp connect) {
   // Driving an instance argument port drives the corresponding argument of the
   // referenced module.
   if (auto instance = dest.getDefiningOp<InstanceOp>()) {
-    auto module = dyn_cast<FModuleOp>(instance.getReferencedModule());
+    auto module =
+        dyn_cast<FModuleOp>(instanceGraph->getReferencedModule(instance));
     if (!module)
       return;
 

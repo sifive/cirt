@@ -10,7 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "./PassDetails.h"
+#include "PassDetails.h"
 #include "circt/Dialect/FIRRTL/FIRRTLAnnotations.h"
 #include "circt/Dialect/FIRRTL/FIRRTLOps.h"
 #include "circt/Dialect/FIRRTL/InstanceGraph.h"
@@ -39,10 +39,11 @@ struct PrefixInfo {
 /// This maps a FModuleOp to a list of all prefixes that need to be applied.
 /// When a module has multiple prefixes, it will be cloned for each one.
 using PrefixMap = DenseMap<StringRef, llvm::SmallSet<std::string, 1>>;
+}
 
 /// Get the PrefixInfo for a module. This reads the annotations on module.  If
 /// the module is not annotated, the prefix returned will be empty.
-PrefixInfo getPrefixInfo(FModuleOp module) {
+static PrefixInfo getPrefixInfo(FModuleOp module) {
   AnnotationSet annotations(module);
 
   // Get the annotation from the module.
@@ -66,7 +67,7 @@ PrefixInfo getPrefixInfo(FModuleOp module) {
 }
 
 /// If there is an inclusive prefix attached to the module, return it.
-StringRef getPrefix(FModuleOp module) {
+static StringRef getPrefix(FModuleOp module) {
   auto prefixInfo = getPrefixInfo(module);
   if (prefixInfo.inclusive)
     return prefixInfo.prefix;
@@ -75,7 +76,7 @@ StringRef getPrefix(FModuleOp module) {
 
 /// Applies the prefix to the module.  This will update the required prefixes of
 /// any referenced module in the prefix map.
-void renameModuleBody(PrefixMap &prefixMap, std::string prefix,
+static void renameModuleBody(PrefixMap &prefixMap, std::string prefix,
                       FModuleOp module) {
   module.body().walk([&](InstanceOp instance) {
     auto target = dyn_cast<FModuleOp>(instance.getReferencedModule());
@@ -98,7 +99,7 @@ void renameModuleBody(PrefixMap &prefixMap, std::string prefix,
 
 /// Apply all required renames to the current module.  This will update the
 /// prefix map for any referenced module.
-void renameModule(PrefixMap &prefixMap, FModuleOp module) {
+static void renameModule(PrefixMap &prefixMap, FModuleOp module) {
   // If the module is annotated to have a prefix, it will be applied after the
   // parent's prefix.
   auto prefixInfo = getPrefixInfo(module);
@@ -139,10 +140,10 @@ void renameModule(PrefixMap &prefixMap, FModuleOp module) {
 /// every module instantiated under the annotated root module's hierarchy. If a
 /// module is instantiated under two different prefix hierarchies, it will be
 /// duplicated and each module will have one prefix applied.
+namespace {
 class PrefixModulesPass : public PrefixModulesBase<PrefixModulesPass> {
   void runOnOperation() override;
 };
-
 } // namespace
 
 void PrefixModulesPass::runOnOperation() {
@@ -164,7 +165,7 @@ void PrefixModulesPass::runOnOperation() {
   // required prefixes to be applied.
   SmallPtrSet<InstanceGraphNode *, 16> visited;
   for (auto module : circuitOp.getOps<FModuleOp>()) {
-    auto *current = instanceGraph.getOrAddNode(module);
+    auto *current = instanceGraph[module];
     for (auto node : llvm::inverse_post_order_ext(current, visited)) {
       if (auto module = dyn_cast<FModuleOp>(node->getModule()))
         renameModule(prefixMap, module);
