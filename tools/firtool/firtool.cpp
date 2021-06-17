@@ -109,6 +109,11 @@ static cl::opt<bool>
                 cl::desc("run the width inference pass on firrtl"),
                 cl::init(true));
 
+static cl::opt<bool>
+    inferResets("infer-resets",
+                cl::desc("run the reset inference pass on firrtl"),
+                cl::init(false));
+
 static cl::opt<bool> extractTestCode("extract-test-code",
                                      cl::desc("run the extract test code pass"),
                                      cl::init(false));
@@ -218,6 +223,9 @@ processBuffer(std::unique_ptr<llvm::MemoryBuffer> ownedBuffer,
   // Width inference creates canonicalization opportunities.
   if (inferWidths)
     pm.nest<firrtl::CircuitOp>().addPass(firrtl::createInferWidthsPass());
+
+  if (inferResets)
+    pm.nest<firrtl::CircuitOp>().addPass(firrtl::createInferResetsPass());
 
   // The input mlir file could be firrtl dialect so we might need to clean
   // things up.
