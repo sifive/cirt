@@ -297,6 +297,7 @@ bool Detector::visitExpr(SubfieldOp op) {
   // into the graph as a node in the MemOp handler.
   if (auto memPortNode = combGraph.getNode(op.input(), fieldIndex + 1)) {
     auto node = combGraph.getOrAddNode(op.result());
+
     // We use `isFlip` to determine the direction of the edge.
     if (portType.getElement(fieldIndex).isFlip)
       memPortNode->addChild(node);
@@ -354,7 +355,7 @@ void Detector::detect() {
   for (auto SCC = SCCIterator::begin(dummyNode); !SCC.isAtEnd(); ++SCC) {
     if (SCC.hasCycle()) {
       auto errorDiag = mlir::emitError(
-          module.getLoc(), "detected combinational SCC in the module");
+          module.getLoc(), "detected combinational cycle in a FIRRTL module");
       for (auto it = SCC->rbegin(); it < SCC->rend(); ++it) {
         auto node = *it;
         auto nodeVal = node->getValOrOp().dyn_cast<Value>();
@@ -362,11 +363,12 @@ void Detector::detect() {
 
         auto &noteDiag =
             errorDiag.attachNote(nodeVal ? nodeVal.getLoc() : nodeOp->getLoc());
+        noteDiag << "this operation is part of the combinational cycle";
 
-        noteDiag << "see node in the combinational SCC";
         // Indicate field ID if it is not zero.
         if (auto fieldID = node->getFieldID())
           noteDiag << ", field ID is " << fieldID;
+
         // Indicate result number if the definining op has multiple results.
         if (nodeVal) {
           auto definingOp = nodeVal.getDefiningOp();
