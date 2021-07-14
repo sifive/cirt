@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PassDetails.h"
+#include "circt/Dialect/FIRRTL/FIRParser.h"
 #include "circt/Dialect/FIRRTL/FIRRTLAnnotations.h"
 #include "circt/Dialect/FIRRTL/FIRRTLOps.h"
 #include "circt/Dialect/FIRRTL/FIRRTLTypes.h"
@@ -132,6 +133,8 @@ struct PortWiring {
   unsigned portNum;
   ArrayRef<InstancePath> prefices;
   SmallString<16> suffix;
+  /// If set, the port should output a constant literal.
+  StringAttr literal;
 };
 
 } // namespace
@@ -430,6 +433,30 @@ void GrandCentralTapsPass::runOnOperation() {
       // Connect the output ports to the appropriate tapped object.
       for (auto port : portWiring) {
         LLVM_DEBUG(llvm::dbgs() << "- Wiring up port " << port.portNum << "\n");
+
+        // Handle literals. We send the literal string off to the FIRParser to
+        // translate into whatever ops are necessary. This yields a handle on
+        // value we're supposed to drive.
+        if (port.literal) {
+          auto parsed = circt::firrtl::parseIntegerLiteralExp(
+              builder.getInsertionBlock(), port.literal.getValue(),
+              blackBox.extModule.getLoc());
+
+          if (failed(parsed)) {
+            blackBox.extModule.emitError("invalid literal \"")
+                << port.literal.getValue() << "\" in LiteralDataTapKey on port "
+                << getModulePortName(blackBox.extModule, port.portNum);
+            signalPassFailure();
+            continue;
+          }
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  - Connecting literal " << parsed << "\n");
+          auto arg = impl.getArgument(port.portNum);
+          builder.create<ConnectOp>(arg, *parsed);
+          continue;
+        }
+
         // Determine the shortest hierarchical prefix from this black box
         // instance to the tapped object.
         Optional<InstancePath> shortestPrefix;
@@ -465,13 +492,13 @@ void GrandCentralTapsPass::runOnOperation() {
         builder.create<ConnectOp>(arg, hnameExpr);
       }
 
-      // Switch the instance from the original extmodule to this
-      // implementation. CAVEAT: If the same black box data tap module is
-      // instantiated in a parent module that itself is instantiated in
-      // different locations, this will pretty arbitrarily pick one of those
-      // locations.
-      path.back()->setAttr("moduleName",
-                           builder.getSymbolRefAttr(name.getValue()));
+      // Switch the instance from the original extmodule to this implementation.
+      // CAVEAT: If the same black box data tap module is instantiated in a
+      // parent module that itself is instantiated in different locations, this
+      // will pretty arbitrarily pick one of those locations.
+      if (!path.empty())
+        path.back()->setAttr("moduleName",
+                             builder.getSymbolRefAttr(name.getValue()));
     }
 
     // Drop the original black box module.
@@ -528,7 +555,8 @@ void GrandCentralTapsPass::processAnnotation(AnnotatedPort &portAnno,
                           << " anno " << portAnno.anno.getDict() << "\n");
   auto key = getKey(portAnno.anno);
   auto portName = getModulePortName(blackBox.extModule, portAnno.portNum);
-  PortWiring wiring = {portAnno.portNum, {}, {}};
+  PortWiring wiring;
+  wiring.portNum = portAnno.portNum;
 
   // Handle data taps on signals and ports.
   if (portAnno.anno.isClass(referenceKeyClass)) {
@@ -613,10 +641,16 @@ void GrandCentralTapsPass::processAnnotation(AnnotatedPort &portAnno,
 
   // Handle data taps with literals.
   if (portAnno.anno.isClass(literalKeyClass)) {
-    blackBox.extModule.emitError(
-        "LiteralDataTapKey annotations not yet supported (on port ")
-        << portName << ")";
-    signalPassFailure();
+    auto literal = portAnno.anno.getMember<StringAttr>("literal");
+    if (!literal) {
+      blackBox.extModule.emitError("LiteralDataTapKey annotation on port ")
+          << portName << " missing \"literal\" attribute";
+      signalPassFailure();
+      return;
+    }
+
+    wiring.literal = literal;
+    portWiring.push_back(std::move(wiring));
     return;
   }
 
