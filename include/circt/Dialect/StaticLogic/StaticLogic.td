@@ -41,6 +41,8 @@ def PipelineOp : Op<StaticLogic_Dialect, "pipeline", [NoSideEffect]> {
   let results = (outs Variadic<AnyType>);
   let regions = (region AnyRegion: $body);
 
+  let hasCanonicalizer = 1;
+
   let skipDefaultBuilders = 1;
 
   let builders = [OpBuilder<(ins "ValueRange":$operands, "ValueRange":$results), [{
@@ -62,8 +64,30 @@ def PipelineOp : Op<StaticLogic_Dialect, "pipeline", [NoSideEffect]> {
   }]>];
 }
 
+def RegisterOp : Op<StaticLogic_Dialect, "register", 
+    [NoSideEffect, Terminator]> {
+  let summary = "register operation";
+  let description = [{
+    The "staticlogic.register" operation is the terminator of blocks inside of a
+    pipeline region. In the further lowering, operands of this operation will be
+    lowered to registers between pipeline stages.
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$destOperands);
+  let successors = (successor AnySuccessor:$dest);
+
+  let builders = [OpBuilder<"OperandRange destOperands, Block *dest", [{
+    odsState.addOperands(destOperands);
+    odsState.addSuccessors(dest);
+  }]>];
+
+  let assemblyFormat = [{
+    $dest (`(` $destOperands^ `:` type($destOperands) `)`)? attr-dict
+  }];
+}
+
 def ReturnOp : Op<StaticLogic_Dialect, "return", [Terminator]> {
-  let summary = "StaticLogic dialect return.";
+  let summary = "StaticLogic dialect return";
   let description = [{
     The "staticlogic.return" operation represents a terminator of a statically
     scheduled module, which is similar to a standard return operation.
