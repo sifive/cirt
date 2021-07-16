@@ -158,3 +158,56 @@ firrtl.circuit "BindTest" attributes {annotations = [{class = "sifive.enterprise
 // Each companion instance has "lowerToBind" set.
 // CHECK: firrtl.module @BindTest
 // CHECK-COUNT-2: firrtl.instance @Companion {lowerToBind = true
+
+// -----
+
+firrtl.circuit "BindInterfaceTest"  attributes {
+  annotations = [{
+    class = "sifive.enterprise.grandcentral.AugmentedBundleType",
+    defName = "InterfaceName",
+    elements = [{
+      name = "_a",
+      tpe = "sifive.enterprise.grandcentral.AugmentedGroundType"
+    }]
+  }]} {
+  firrtl.module @BindInterfaceTest(
+    in %a: !firrtl.uint<8> {
+      firrtl.annotations = [
+        #firrtl.subAnno<fieldID = [0, 0], {
+          class = "sifive.enterprise.grandcentral.AugmentedGroundType",
+          defName = "InterfaceName",
+          name = "_a"}>
+      ]},
+    out %b: !firrtl.uint<8>) attributes {
+      annotations = [{
+        class = "sifive.enterprise.grandcentral.GrandCentralView$SerializedViewAnnotation",
+        defName = "InterfaceName",
+        id = 0 : i64,
+        name = "instanceName",
+        type = "parent"
+      }]} {
+    firrtl.connect %b, %a : !firrtl.uint<8>, !firrtl.uint<8>
+  }
+}
+
+// The bind is dropped in the outer module, outside the circuit.
+// CHECK: module {
+// CHECK-NEXT: sv.bind.interface @[[INTERFACE_INSTANCE_SYMBOL:.+]] {output_file
+
+// CHECK-LABEL: firrtl.circuit "BindInterfaceTest"
+
+// Annotations are removed from the circuit.
+// CHECK-NOT: annotations
+// CHECK-SAME: {
+
+// Annotations are removed from the module.
+// CHECK-NEXT: firrtl.module @BindInterfaceTest
+// CHECK-NOT: annotations
+// CHECK-SAME: %a
+
+// An instance of the interface was added to the module.
+// CHECK: sv.interface.instance sym @[[INTERFACE_INSTANCE_SYMBOL]] {doNotPrint = true, name = "instanceName"} : !sv.interface<@InterfaceName>
+
+// The interface is added.
+// CHECK: sv.interface @InterfaceName {
+// CHECK-NEXT: sv.interface.signal @_a : i8
