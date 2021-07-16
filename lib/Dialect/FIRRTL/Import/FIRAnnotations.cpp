@@ -886,13 +886,23 @@ bool circt::firrtl::scatterCustomAnnotations(
       if (!parentAttr)
         return false;
       parentAttrs.append("class", dict.get("class"));
+      auto viewAttr = tryGetAs<DictionaryAttr>(dict, dict, "view", loc, clazz);
+      if (!viewAttr)
+        return false;
+      auto defName =
+          tryGetAs<StringAttr>(viewAttr, viewAttr, "defName", loc, clazz);
+      if (!defName)
+        return false;
       parentAttrs.append("id", id);
+      auto name = tryGetAs<StringAttr>(dict, dict, "name", loc, clazz);
+      if (!name)
+        return false;
+      parentAttrs.append("name", name);
       parentAttrs.append("type", StringAttr::get(context, "parent"));
+      parentAttrs.append("defName", defName);
       newAnnotations[parentAttr.getValue()].push_back(
           DictionaryAttr::get(context, parentAttrs));
-      auto viewAttr = tryGetAs<DictionaryAttr>(dict, dict, "view", loc, clazz);
-      if (!viewAttr ||
-          !parseAugmentedType(context, viewAttr, dict, newAnnotations,
+      if (!parseAugmentedType(context, viewAttr, dict, newAnnotations,
                               companion, {}, {}, loc, clazz, "view"))
         return false;
       continue;
