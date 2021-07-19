@@ -1323,6 +1323,20 @@ LogicalResult NodeOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
+static LogicalResult verifyRegResetOp(RegResetOp op) {
+  // Async reset values must be a constant or invalidvalue.
+  if (op.resetSignal().getType().isa<AsyncResetType>() &&
+      !isConstant(op.resetValue()) &&
+      !isa_and_nonnull<InvalidValueOp>(op.resetValue().getDefiningOp())) {
+    return op.emitError(
+                 "register with async reset requires constant reset value")
+               .attachNote(op.resetValue().getLoc())
+           << "reset value defined here:";
+  }
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Statements
 //===----------------------------------------------------------------------===//
@@ -1626,6 +1640,46 @@ static LogicalResult verifySubfieldOp(SubfieldOp op) {
     return op.emitOpError("subfield element index is greater than the number "
                           "of fields in the bundle type");
   return success();
+}
+
+/// Check that a value is driven by a constant value. Looks through subindex and
+/// subfield ops.
+static bool isDrivenByConstant(Value op) {
+  for (auto &use : op.getUses()) {
+    auto result = TypeSwitch<Operation *, bool>(use.getOwner())
+                      .Case<SubindexOp, SubfieldOp>([](auto op) {
+                        return isDrivenByConstant(op.getResult());
+                      })
+                      .Case<SubaccessOp>([](auto) { return false; })
+                      .Case<PartialConnectOp, ConnectOp>([&](auto op) {
+                        if (use.get() == op.dest())
+                          return isConstant(op.src());
+                        else
+                          return true;
+                      })
+                      .Default([](auto) { return true; });
+    if (!result)
+      return false;
+  }
+  return true;
+}
+
+/// Return true if the specified operation has a constant value. This trivially
+/// checks for `firrtl.constant` and friends, but also looks through subaccesses
+/// and correctly handles wires driven with only constant values.
+bool firrtl::isConstant(Operation *op) {
+  return TypeSwitch<Operation *, bool>(op)
+      .Case<ConstantOp, SpecialConstantOp>([](auto) { return true; })
+      .Case<NodeOp>([](auto op) { return isConstant(op.input()); })
+      .Case<WireOp, SubindexOp, SubfieldOp>(
+          [](auto op) { return isDrivenByConstant(op.getResult()); })
+      .Default([](auto) { return false; });
+}
+
+bool firrtl::isConstant(Value value) {
+  if (auto op = value.getDefiningOp())
+    return isConstant(op);
+  return false;
 }
 
 FIRRTLType SubfieldOp::inferReturnType(ValueRange operands,

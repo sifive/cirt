@@ -145,6 +145,89 @@ firrtl.circuit "Foo" {
 // -----
 
 firrtl.circuit "Foo" {
+  firrtl.module @Foo(in %clock: !firrtl.clock, in %reset: !firrtl.asyncreset, in %v: !firrtl.uint<8>) {
+    // Constant check should handle trivial cases.
+    // expected-error @+2 {{register with async reset requires constant reset value}}
+    // expected-note @-3 {{reset value defined here:}}
+    %0 = firrtl.regreset %clock, %reset, %v : (!firrtl.clock, !firrtl.asyncreset, !firrtl.uint<8>) -> !firrtl.uint<8>
+  }
+}
+
+// -----
+
+firrtl.circuit "Foo" {
+  firrtl.module @Foo(in %clock: !firrtl.clock, in %reset: !firrtl.asyncreset, in %v: !firrtl.uint<8>) {
+  // Constant check should see through nodes.
+    %node = firrtl.node %v : !firrtl.uint<8>
+    // expected-error @+2 {{register with async reset requires constant reset value}}
+    // expected-note @-2 {{reset value defined here:}}
+    %1 = firrtl.regreset %clock, %reset, %node : (!firrtl.clock, !firrtl.asyncreset, !firrtl.uint<8>) -> !firrtl.uint<8>
+  }
+}
+
+// -----
+
+firrtl.circuit "Foo" {
+  firrtl.module @Foo(in %clock: !firrtl.clock, in %reset: !firrtl.asyncreset, in %v: !firrtl.uint<8>) {
+    // Constant check should see through subfield connects.
+    %bundle0 = firrtl.wire : !firrtl.bundle<a: uint<8>>
+    %bundle0.a = firrtl.subfield %bundle0(0) : (!firrtl.bundle<a: uint<8>>) -> !firrtl.uint<8>
+    firrtl.connect %bundle0.a, %v : !firrtl.uint<8>, !firrtl.uint<8>
+    // expected-error @+2 {{register with async reset requires constant reset value}}
+    // expected-note @-4 {{reset value defined here:}}
+    %2 = firrtl.regreset %clock, %reset, %bundle0 : (!firrtl.clock, !firrtl.asyncreset, !firrtl.bundle<a: uint<8>>) -> !firrtl.bundle<a: uint<8>>
+  }
+}
+
+// -----
+
+firrtl.circuit "Foo" {
+  firrtl.module @Foo(in %clock: !firrtl.clock, in %reset: !firrtl.asyncreset, in %v: !firrtl.uint<8>) {
+    // Constant check should see through multiple connect hops.
+    %bundle0 = firrtl.wire : !firrtl.bundle<a: uint<8>>
+    %bundle0.a = firrtl.subfield %bundle0(0) : (!firrtl.bundle<a: uint<8>>) -> !firrtl.uint<8>
+    firrtl.connect %bundle0.a, %v : !firrtl.uint<8>, !firrtl.uint<8>
+    %bundle1 = firrtl.wire : !firrtl.bundle<a: uint<8>>
+    firrtl.connect %bundle1, %bundle0 : !firrtl.bundle<a: uint<8>>, !firrtl.bundle<a: uint<8>>
+    // expected-error @+2 {{register with async reset requires constant reset value}}
+    // expected-note @-3 {{reset value defined here:}}
+    %3 = firrtl.regreset %clock, %reset, %bundle1 : (!firrtl.clock, !firrtl.asyncreset, !firrtl.bundle<a: uint<8>>) -> !firrtl.bundle<a: uint<8>>
+  }
+}
+
+// -----
+
+firrtl.circuit "Foo" {
+  firrtl.module @Foo(in %clock: !firrtl.clock, in %reset: !firrtl.asyncreset, in %v: !firrtl.uint<8>) {
+    // Constant check should see through subindex connects.
+    %vector0 = firrtl.wire : !firrtl.vector<uint<8>, 1>
+    %vector0.a = firrtl.subindex %vector0[0] : !firrtl.vector<uint<8>, 1>
+    firrtl.connect %vector0.a, %v : !firrtl.uint<8>, !firrtl.uint<8>
+    // expected-error @+2 {{register with async reset requires constant reset value}}
+    // expected-note @-4 {{reset value defined here:}}
+    %4 = firrtl.regreset %clock, %reset, %vector0 : (!firrtl.clock, !firrtl.asyncreset, !firrtl.vector<uint<8>, 1>) -> !firrtl.vector<uint<8>, 1>
+  }
+}
+
+// -----
+
+firrtl.circuit "Foo" {
+  firrtl.module @Foo(in %clock: !firrtl.clock, in %reset: !firrtl.asyncreset, in %v: !firrtl.uint<8>) {
+    // Constant check should see through multiple connect hops.
+    %vector0 = firrtl.wire : !firrtl.vector<uint<8>, 1>
+    %vector0.a = firrtl.subindex %vector0[0] : !firrtl.vector<uint<8>, 1>
+    firrtl.connect %vector0.a, %v : !firrtl.uint<8>, !firrtl.uint<8>
+    %vector1 = firrtl.wire : !firrtl.vector<uint<8>, 1>
+    firrtl.connect %vector1, %vector0 : !firrtl.vector<uint<8>, 1>, !firrtl.vector<uint<8>, 1>
+    // expected-error @+2 {{register with async reset requires constant reset value}}
+    // expected-note @-3 {{reset value defined here:}}
+    %5 = firrtl.regreset %clock, %reset, %vector1 : (!firrtl.clock, !firrtl.asyncreset, !firrtl.vector<uint<8>, 1>) -> !firrtl.vector<uint<8>, 1>
+  }
+}
+
+// -----
+
+firrtl.circuit "Foo" {
 
   // expected-error @+1 {{'firrtl.extmodule' op attribute 'defname' with value "Bar" conflicts with the name of another module in the circuit}}
   firrtl.extmodule @Foo() attributes { defname = "Bar" }

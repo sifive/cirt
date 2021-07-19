@@ -56,6 +56,12 @@ SmallVector<Direction> unpackAttribute(Operation *module);
 /// Return true if the specified operation is a firrtl expression.
 bool isExpression(Operation *op);
 
+/// Return true if the specified operation has a constant value. This trivially
+/// checks for `firrtl.constant` and friends, but also looks through subaccesses
+/// and correctly handles wires driven with only constant values.
+bool isConstant(Operation *op);
+bool isConstant(Value value);
+
 /// This holds the name and type that describes the module's ports.
 struct ModulePortInfo {
   StringAttr name;
