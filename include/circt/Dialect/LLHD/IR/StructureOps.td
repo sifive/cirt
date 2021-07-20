@@ -302,3 +302,138 @@ def LLHD_HaltOp : LLHD_Op<"halt", [Terminator, HasParent<"ProcOp">]> {
 
   let assemblyFormat = "attr-dict";
 }
+
+def LLHD_ForOp : LLHD_Op<"for", [
+      DeclareOpInterfaceMethods<LoopLikeOpInterface>,
+      DeclareOpInterfaceMethods<RegionBranchOpInterface>,
+      RecursiveSideEffects,
+      AllTypesMatch<["lowerBound", "upperBound", "step"]>
+  ]> {
+  let summary = "For-loop operation";
+  let description = [{
+    The "llhd.for" operation represents a loop taking 3 SSA values as operands
+    that represent the lower bound, upper bound and step respectively. The
+    operation defines an SSA value for its induction variable. It has one
+    region representing the loop body. The induction variable is represented as
+    an argument of this region.
+    The range of the for-loop includes the lower bound but does not include the
+    upper bound.
+
+    The body region can contain arbitrarily many blocks, but the CFG has to be a
+    DAG, so no backwards edges are allowed. At least one block has to use the
+    "llhd.yield" terminator, but there can also be arbitrarily many of them. The
+    branch (`br`) and conditional branch (`cond_br`) from the standard dialect
+    are the only two other valid block terminators inside the for-loop body
+    region.
+
+    ```mlir
+    llhd.for (%i = %lb : i32) to %ub step %step {
+      // body
+    }
+    ```
+
+    `llhd.for` can also operate on loop-carried variables and returns the final
+    values after loop termination. The initial values of the variables are
+    passed as additional SSA operands to the "llhd.for" following the 3 loop
+    control SSA values mentioned above. The operation region has equivalent
+    arguments for each variable representing the value of the variable at the
+    current iteration.
+
+    All `llhd.yield` terminators must pass all the current iteration variables
+    to the next iteration or the `llhd.for` result.
+
+    ```mlir
+    /// Consider the sequence of even natural numbers. Calculate the partial sum
+    /// of the first %n terms of this sequence.
+    func @partialSum(%n: i32) -> (i32) {
+      %sum_0 = llhd.const 0 : i32
+      %two = llhd.const 2 : i32
+      // iter_args binds initial values to the loop's region arguments.
+      %sum = llhd.for (%i = %two : i32) to %n step %two
+          iter_args(%sum_iter = %sum_0) -> (i32) {
+        %sum_next = addi %sum_iter, %i : i32
+        // Yield current iteration sum to next iteration %sum_iter or to %sum
+        // if final iteration.
+        llhd.yield %sum_next : i32
+      }
+      return %sum : i32
+    }
+    ```
+
+  }];
+  let arguments = (ins AnySignlessInteger:$lowerBound,
+                       AnySignlessInteger:$upperBound,
+                       AnySignlessInteger:$step,
+                       Variadic<AnyType>:$initArgs);
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region AnyRegion:$region);
+
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilderDAG<(ins "Value":$lowerBound, "Value":$upperBound, "Value":$step,
+      CArg<"ValueRange", "llvm::None">:$iterArgs)>
+  ];
+
+  let extraClassDeclaration = [{
+    Value getInductionVar() { return getLoopBody().front().getArgument(0); }
+
+    Block::BlockArgListType getRegionIterArgs() {
+      return getLoopBody().front().getArguments().drop_front();
+    }
+
+    Operation::operand_range getIterOperands() {
+      return getOperands().drop_front(getNumControlOperands());
+    }
+
+    void setLowerBound(Value bound) { getOperation()->setOperand(0, bound); }
+    void setUpperBound(Value bound) { getOperation()->setOperand(1, bound); }
+    void setStep(Value step) { getOperation()->setOperand(2, step); }
+
+    // Number of region arguments for loop-carried values
+    unsigned getNumRegionIterArgs() {
+      return getLoopBody().front().getNumArguments() - 1;
+    }
+
+    // Number of operands controlling the loop: lb, ub, step
+    unsigned getNumControlOperands() { return 3; }
+
+    // Does the operation hold operands for loop-carried values
+    bool hasIterOperands() {
+      return getOperation()->getNumOperands() > getNumControlOperands();
+    }
+
+    // Get Number of loop-carried values
+    unsigned getNumIterOperands() {
+      return getOperation()->getNumOperands() - getNumControlOperands();
+    }
+  }];
+
+  let verifier = [{ return ::verify(*this); }];
+}
+
+def LLHD_YieldOp : LLHD_Op<"yield", [
+    NoSideEffect,
+    ReturnLike,
+    Terminator,
+    HasParent<"ForOp">
+  ]> {
+  let summary = "Loop yield and termination operation";
+  let description = [{
+    `llhd.yield` yields SSA values from an `llhd.for` operation.
+    The `llhd.yield` operands must match the parent operation's results.
+
+    Example:
+
+    ```mlir
+    llhd.yield
+    llhd.yield %a, %b, %c : i32, !llhd.array<3xi1>, tuple<i1, i2, i3>
+    ```
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$results);
+  let builders = [OpBuilderDAG<(ins), [{ /* nothing to do */ }]>];
+
+  let assemblyFormat = "attr-dict ($results^ `:` type($results))?";
+
+  let verifier = [{ return ::verify(*this); }];
+}

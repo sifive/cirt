@@ -1175,6 +1175,229 @@ static LogicalResult verify(llhd::RegOp op) {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// ForOp
+//===----------------------------------------------------------------------===//
+
+void llhd::ForOp::build(OpBuilder &builder, OperationState &result, Value lb,
+                        Value ub, Value step, ValueRange iterArgs) {
+  result.addOperands({lb, ub, step});
+  result.addOperands(iterArgs);
+
+  for (Value v : iterArgs)
+    result.addTypes(v.getType());
+
+  Region *bodyRegion = result.addRegion();
+  bodyRegion->push_back(new Block);
+
+  Block &bodyBlock = bodyRegion->front();
+  bodyBlock.addArgument(lb.getType());
+
+  for (Value v : iterArgs)
+    bodyBlock.addArgument(v.getType());
+}
+
+static LogicalResult verifyDAG(DenseMap<Block *, bool> &visited, Block *block) {
+  assert(visited.count(block) &&
+         "Visited map has to be initialized for all blocks in the region!");
+
+  if (visited[block])
+    return failure();
+
+  visited[block] = true;
+  for (Block *succ : block->getSuccessors()) {
+    if (failed(verifyDAG(visited, succ)))
+      return failure();
+  }
+  visited[block] = false;
+  return success();
+}
+
+static LogicalResult verify(llhd::ForOp op) {
+  // Check that the body defines a single block argument for the induction
+  // variable.
+  if (!op.getInductionVar().getType().isSignlessInteger())
+    return op.emitOpError(
+        "expected body first argument to be a signless integer argument for "
+        "the induction variable");
+
+  auto opNumResults = op.getNumResults();
+
+  // If ForOp defines values, check that the number and types of
+  // the defined values match ForOp initial iter operands and backedge
+  // basic block arguments.
+  if (op.getNumIterOperands() != opNumResults)
+    return op.emitOpError(
+        "mismatch in number of loop-carried values and defined values");
+
+  if (op.getNumRegionIterArgs() != opNumResults)
+    return op.emitOpError(
+        "mismatch in number of basic block args and defined values");
+
+  auto iterOperands = op.getIterOperands();
+  auto iterArgs = op.getRegionIterArgs();
+  auto opResults = op.getResults();
+
+  for (unsigned i = 0; i < opNumResults; ++i) {
+    Type resultType = opResults[i].getType();
+    Type operandType = iterOperands[i].getType();
+    Type argumentType = iterArgs[i].getType();
+
+    if (operandType != resultType)
+      return op.emitOpError("result type does not match the type of the "
+                            "initial loop-carried value at position ")
+             << i << " (expected " << resultType << ", but got " << operandType
+             << ").";
+
+    if (argumentType != resultType)
+      return op.emitOpError("result type does not match the specified argument "
+                            "type for the loop-carried value at position ")
+             << i << " (expected " << resultType << ", but got " << argumentType
+             << ").";
+  }
+
+  // Verify that the CFG of the loop body is a DAG
+  auto &entryBlock = op.getLoopBody().front();
+  DenseMap<Block *, bool> visited;
+
+  for (Block &block : op.getLoopBody().getBlocks()) {
+    if (block.empty() || block.back().isKnownNonTerminator())
+      return op.emitOpError(
+          "every block in the loop body must have a terminator!");
+
+    visited.insert(std::make_pair(&block, false));
+  }
+
+  if (failed(verifyDAG(visited, &entryBlock)))
+    return op.emitOpError("CFG of loop body must be a DAG!");
+
+  return success();
+}
+
+static void print(OpAsmPrinter &p, llhd::ForOp op) {
+  p << op.getOperationName() << " (" << op.getInductionVar() << " = "
+    << op.lowerBound() << " : " << op.lowerBound().getType() << ") to "
+    << op.upperBound() << " step " << op.step();
+
+  if (op.hasIterOperands()) {
+    p << " iter_args(";
+    auto regionArgs = op.getRegionIterArgs();
+    auto operands = op.getIterOperands();
+
+    llvm::interleaveComma(llvm::zip(regionArgs, operands), p, [&](auto it) {
+      p << std::get<0>(it) << " = " << std::get<1>(it);
+    });
+    p << ")";
+    p << " -> (" << op.getResultTypes() << ")";
+  }
+  p.printRegion(op.region(),
+                /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/true);
+  p.printOptionalAttrDict(op.getAttrs());
+}
+
+static ParseResult parseForOp(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::OperandType inductionVariable, lb, ub, step;
+  Type inductionType;
+  // Parse for loop header
+  if (parser.parseLParen() || parser.parseRegionArgument(inductionVariable) ||
+      parser.parseEqual() || parser.parseOperand(lb) ||
+      parser.parseColonType(inductionType) || parser.parseRParen() ||
+      parser.resolveOperand(lb, inductionType, result.operands) ||
+      parser.parseKeyword("to") || parser.parseOperand(ub) ||
+      parser.resolveOperand(ub, inductionType, result.operands) ||
+      parser.parseKeyword("step") || parser.parseOperand(step) ||
+      parser.resolveOperand(step, inductionType, result.operands))
+    return failure();
+
+  // Parse the optional initial iteration arguments.
+  SmallVector<OpAsmParser::OperandType, 4> regionArgs, operands;
+  SmallVector<Type, 4> argTypes;
+  regionArgs.push_back(inductionVariable);
+
+  if (succeeded(parser.parseOptionalKeyword("iter_args"))) {
+    // Parse assignment list and results type list.
+    if (parser.parseAssignmentList(regionArgs, operands) ||
+        parser.parseArrowTypeList(result.types))
+      return failure();
+    // Resolve input operands.
+    for (auto operandType : llvm::zip(operands, result.types))
+      if (parser.resolveOperand(std::get<0>(operandType),
+                                std::get<1>(operandType), result.operands))
+        return failure();
+  }
+  // Induction variable.
+  argTypes.push_back(inductionType);
+  // Loop carried variables
+  argTypes.append(result.types.begin(), result.types.end());
+  // Parse the body region.
+  Region *body = result.addRegion();
+  if (regionArgs.size() != argTypes.size())
+    return parser.emitError(
+        parser.getNameLoc(),
+        "mismatch in number of loop-carried values and defined values");
+
+  if (parser.parseRegion(*body, regionArgs, argTypes))
+    return failure();
+
+  // Parse the optional attribute list.
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+Region &llhd::ForOp::getLoopBody() { return region(); }
+
+bool llhd::ForOp::isDefinedOutsideOfLoop(Value value) {
+  return !region().isAncestor(value.getParentRegion());
+}
+
+LogicalResult llhd::ForOp::moveOutOfLoop(ArrayRef<Operation *> ops) {
+  for (auto *op : ops)
+    op->moveBefore(*this);
+  return success();
+}
+
+/// Given the region at `index`, or the parent operation if `index` is None,
+/// return the successor regions. These are the regions that may be selected
+/// during the flow of control. `operands` is a set of optional attributes that
+/// correspond to a constant value for each operand, or null if that operand is
+/// not a constant.
+void llhd::ForOp::getSuccessorRegions(
+    Optional<unsigned> index, ArrayRef<Attribute> operands,
+    SmallVectorImpl<RegionSuccessor> &regions) {
+  // If the predecessor is the ForOp, branch into the body using the iterator
+  // arguments.
+  if (!index.hasValue()) {
+    regions.push_back(RegionSuccessor(&getLoopBody(), getRegionIterArgs()));
+    return;
+  }
+
+  // Otherwise, the loop may branch back to itself or the parent operation.
+  assert(index.getValue() == 0 && "expected loop region");
+  regions.push_back(RegionSuccessor(&getLoopBody(), getRegionIterArgs()));
+  regions.push_back(RegionSuccessor(getResults()));
+}
+
+static LogicalResult verify(llhd::YieldOp op) {
+  auto forOp = op->getParentOfType<llhd::ForOp>();
+
+  if (op.results().size() != forOp.getNumIterOperands())
+    return op.emitOpError("number of results do not match number of "
+                          "parent ForOp results (expected ")
+           << forOp.getNumIterOperands() << ", but got " << op.results().size()
+           << ").";
+
+  if (!std::equal(op.results().getTypes().begin(),
+                  op.results().getTypes().end(),
+                  forOp.getIterOperands().getTypes().begin()))
+    return op.emitOpError(
+        "result types do not match parent ForOp result types.");
+
+  return success();
+}
+
 #include "circt/Dialect/LLHD/IR/LLHDEnums.cpp.inc"
 
 #define GET_OP_CLASSES
