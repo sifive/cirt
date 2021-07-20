@@ -27,6 +27,7 @@ class CombNodeImpl;
 
 using CombNode = CombNodeImpl *;
 using ValueOrOpType = PointerUnion<Value, Operation *>;
+using CombNodeKeyType = std::pair<ValueOrOpType, unsigned>;
 
 //===----------------------------------------------------------------------===//
 // CombNodeImpl class
@@ -76,25 +77,26 @@ namespace {
 // This is a combinational graph contains a set of nodes.
 class CombGraph {
 public:
+  ~CombGraph() {
+    for (auto node : nodes)
+      node->~CombNodeImpl();
+  }
+
   /// Get a node from the graph if it exists. Otherwise, allocate a new node and
   /// add to the graph.
   CombNode getOrAddNode(ValueOrOpType valOrOp, unsigned fieldID = 0) {
-    auto node = CombNodeImpl(valOrOp, fieldID);
-    auto it = nodes.find(&node);
+    auto it = nodes.find_as<CombNodeKeyType>({valOrOp, fieldID});
     if (it != nodes.end())
       return *it;
-    auto newNode = new (allocator) CombNodeImpl(std::move(node));
+    auto newNode = new (allocator) CombNodeImpl(valOrOp, fieldID);
     nodes.insert(newNode);
     return newNode;
   }
 
   /// Get a node from the graph if it exists.
   CombNode getNode(ValueOrOpType valOrOp, unsigned fieldID = 0) {
-    auto node = CombNodeImpl(valOrOp, fieldID);
-    auto it = nodes.find(&node);
-    if (it != nodes.end())
-      return *it;
-    return nullptr;
+    auto it = nodes.find_as<CombNodeKeyType>({valOrOp, fieldID});
+    return it != nodes.end() ? *it : nullptr;
   }
 
 private:
@@ -131,7 +133,10 @@ struct GraphTraits<CombNode> {
 // Detector class
 //===----------------------------------------------------------------------===//
 
-using CombPaths = SmallDenseMap<int64_t, SmallVector<int64_t>>;
+/// This is used for storing combinational paths between IOs of a FIRRTL module.
+/// The two elements of the pair are the argument index of the input port and
+/// output port, respectively.
+using CombPaths = SmallVector<std::pair<unsigned, unsigned>>;
 
 namespace {
 class Detector : public FIRRTLVisitor<Detector, bool> {
@@ -222,11 +227,12 @@ bool Detector::visitDecl(InstanceOp op) {
     nodes.push_back(combGraph.getOrAddNode(result));
 
   // Query the combinational paths between IOs and create edges.
-  for (auto combPath :
-       combPathsMap.lookup(instanceGraph.getReferencedModule(op))) {
+  auto const &combPaths =
+      combPathsMap.lookup(instanceGraph.getReferencedModule(op));
+  for (auto const &combPath : combPaths) {
     auto srcNode = nodes[combPath.first];
-    for (auto i : combPath.second)
-      srcNode->addChild(nodes[i]);
+    auto dstNode = nodes[combPath.second];
+    srcNode->addChild(dstNode);
   }
   return true;
 }
@@ -386,25 +392,22 @@ void Detector::detect() {
   SmallVector<BlockArgument, 4> inputs;
   SmallVector<bool, 8> directionList;
   unsigned index = 0;
-  for (auto port : module.getPorts()) {
+  for (auto &port : module.getPorts()) {
     directionList.push_back(port.isOutput());
     if (!port.isOutput())
       inputs.push_back(module.getPortArgument(index));
     ++index;
   }
 
-  // Launch a DFS for each input to find outputs that are combinationally
-  // connected to it.
+  // Launch a DFS for each input port to find the output ports that are
+  // combinationally connected to it.
+  auto &combPaths = combPathsMap[module];
   for (auto input : inputs) {
-    auto inputIndex = input.getArgNumber();
     for (auto node : llvm::depth_first<CombNode>(combGraph.getNode(input))) {
-      if (auto nodeVal = node->getValOrOp().dyn_cast<Value>()) {
-        if (auto output = nodeVal.dyn_cast<BlockArgument>()) {
-          auto outputIndex = output.getArgNumber();
-          if (directionList[outputIndex])
-            combPathsMap[module][inputIndex].push_back(outputIndex);
-        }
-      }
+      if (auto val = node->getValOrOp().dyn_cast<Value>())
+        if (auto output = val.dyn_cast<BlockArgument>())
+          if (directionList[output.getArgNumber()])
+            combPaths.push_back({input.getArgNumber(), output.getArgNumber()});
     }
   }
 }
@@ -424,6 +427,7 @@ struct DenseMapInfo<CombNode> {
     auto pointer = llvm::DenseMapInfo<void *>::getTombstoneKey();
     return static_cast<CombNode>(pointer);
   }
+
   static unsigned getHashValue(const CombNodeImpl *node) {
     return node->hash_value();
   }
@@ -433,6 +437,18 @@ struct DenseMapInfo<CombNode> {
     if (lhs == empty || lhs == tombstone || rhs == empty || rhs == tombstone)
       return lhs == rhs;
     return *lhs == *rhs;
+  }
+
+  // Allow lookup via find_as(), without constructing a temporary CombNodeImpl.
+  static unsigned getHashValue(const CombNodeKeyType key) {
+    return llvm::hash_combine(key.first.getOpaqueValue(), key.second);
+  }
+  static bool isEqual(const CombNodeKeyType lhs, const CombNodeImpl *rhs) {
+    auto empty = getEmptyKey();
+    auto tombstone = getTombstoneKey();
+    if (rhs == empty || rhs == tombstone)
+      return false;
+    return lhs.first == rhs->getValOrOp() && lhs.second == rhs->getFieldID();
   }
 };
 } // namespace llvm
@@ -453,7 +469,7 @@ class CheckCombCyclesPass : public CheckCombCyclesBase<CheckCombCyclesPass> {
     // between IOs of a module have been detected and recorded in `combPathsMap`
     // before we handle its parent modules.
     for (auto node : llvm::post_order<InstanceGraph *>(&instanceGraph)) {
-      // TODO: Handle FExtModuleOp with annotations.
+      // TODO: Handle FExtModuleOp with `ExtModulePathAnnotation`s.
       if (auto module = dyn_cast<FModuleOp>(node->getModule()))
         Detector(module, combPathsMap, instanceGraph).detect();
     }
@@ -461,8 +477,7 @@ class CheckCombCyclesPass : public CheckCombCyclesBase<CheckCombCyclesPass> {
   }
 
 private:
-  // Global combinational paths map. Used to store the combinational paths
-  // between IOs of modules in the circuit.
+  /// A global map from FIRRTL modules to their combinational paths between IOs.
   DenseMap<Operation *, CombPaths> combPathsMap;
 };
 } // namespace
