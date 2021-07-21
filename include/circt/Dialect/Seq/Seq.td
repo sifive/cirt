@@ -19,6 +19,9 @@ include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Pass/PassBase.td"
 
+// Include this file to pick up the enumerations exposed by the SystemVerilog dialect.
+include "circt/Dialect/SV/SVEnums.td"
+
 def SeqDialect : Dialect {
   let name = "seq";
 
@@ -47,8 +50,29 @@ def CompRegOp : SeqOp<"compreg",
     Optional<I1>:$reset, Optional<AnyType>:$resetValue);
   let results = (outs AnyType:$data);
 
-  let printer = "return ::print(p, *this);";
+  let printer = "return ::print$cppClass(p, *this);";
   let parser = "return ::parse$cppClass(parser, result);";
+}
+
+def RegOp : SeqOp<"reg",
+    [AllTypesMatch<["input", "data"]>, SameVariadicOperandSize]> {
+
+  let summary = "A complete implementation of registers.";
+  let description = "See the Seq dialect rationale for a longer description";
+
+  let arguments = (ins AnyType:$input, I1:$clk,
+    I1:$enable,
+    Optional<I1>:$reset, Optional<AnyType>:$resetValue,
+    EventControlAttr:$clockEdge,
+    OptionalAttr<EventControlAttr>:$resetEdge,
+    ResetTypeAttr:$resetType
+    );
+
+  let results = (outs AnyType:$data);
+
+  let assemblyFormat = "$input `,` $clockEdge $clk `,` `enable` $enable `,` $resetType ($resetEdge^ $reset `,` $resetValue `:` type($resetValue))? attr-dict `:`  type($input)";
+
+  let verifier = "return ::verifyReg(*this);";
 }
 
 def LowerSeqToSV: Pass<"lower-seq-to-sv", "mlir::ModuleOp"> {

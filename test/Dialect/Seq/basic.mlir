@@ -38,3 +38,65 @@ hw.module @top(%clk: i1, %rst: i1, %i: i32, %s: !hw.struct<foo: i32>) {
   // SV:   sv.passign [[REG4]], %s : !hw.struct<foo: i32>
   // SV: }
 }
+
+hw.module @testRegWithPosedgeSyncReset(%clk: i1, %d: !hw.struct<foo:i32>, %reset: i1, %resetValue: !hw.struct<foo:i32>) -> (%o : !hw.struct<foo:i32>) {
+  // SV-LABEL: hw.module @testRegWithPosedgeSyncReset
+  // SV-NEXT:    %true = hw.constant true
+  // SV-NEXT:    [[REG:%.+]] = sv.reg : !hw.inout<struct<foo: i32>>
+  // SV-NEXT:    [[OUTPUT:%.+]] = sv.read_inout %0 : !hw.inout<struct<foo: i32>>
+  // SV-NEXT:    sv.alwaysff(posedge %clk) {
+  // SV-NEXT:      sv.passign [[REG]], %d : !hw.struct<foo: i32>
+  // SV-NEXT:    }(syncreset : posedge %reset) {
+  // SV-NEXT:      sv.passign [[REG]], %resetValue : !hw.struct<foo: i32>
+  // SV-NEXT:    }
+  // SV-NEXT:    hw.output [[OUTPUT]] : !hw.struct<foo: i32>
+  %vdd = hw.constant true
+  %r0  = seq.reg %d, posedge %clk, enable %vdd, syncreset posedge %reset, %resetValue : !hw.struct<foo:i32>  : !hw.struct<foo:i32>
+  hw.output %r0 : !hw.struct<foo:i32>
+}
+
+hw.module @testRegWithPosedgeAsyncReset(%clk: i1, %d: !hw.struct<foo:i32>, %reset: i1, %resetValue: !hw.struct<foo:i32>) -> (%o : !hw.struct<foo:i32>) {
+  // SV-LABEL: hw.module @testRegWithPosedgeAsyncReset
+  // SV-NEXT:    %true = hw.constant true
+  // SV-NEXT:    [[REG:%.+]] = sv.reg : !hw.inout<struct<foo: i32>>
+  // SV-NEXT:    [[OUTPUT:%.+]] = sv.read_inout %0 : !hw.inout<struct<foo: i32>>
+  // SV-NEXT:    sv.alwaysff(posedge %clk) {
+  // SV-NEXT:      sv.passign [[REG]], %d : !hw.struct<foo: i32>
+  // SV-NEXT:    }(asyncreset : posedge %reset) {
+  // SV-NEXT:      sv.passign [[REG]], %resetValue : !hw.struct<foo: i32>
+  // SV-NEXT:    }
+  // SV-NEXT:    hw.output [[OUTPUT]] : !hw.struct<foo: i32>
+  %vdd = hw.constant true
+  %r0  = seq.reg %d, posedge %clk, enable %vdd, asyncreset posedge %reset, %resetValue : !hw.struct<foo:i32>  : !hw.struct<foo:i32>
+  hw.output %r0 : !hw.struct<foo:i32>
+}
+
+hw.module @testRegWithEnable(%clk: i1, %d: !hw.struct<foo:i32>, %enable: i1) -> (%o : !hw.struct<foo:i32>) {
+  // SV-LABEL: hw.module @testRegWithEnable
+  // SV: [[REG:%.+]] = sv.reg : !hw.inout<struct<foo: i32>>
+  // SV: [[OUTPUT:%.+]] = sv.read_inout [[REG]] : !hw.inout<struct<foo: i32>>
+  // SV: sv.alwaysff(posedge %clk) {
+  // SV:   sv.if %enable {
+  // SV:     sv.passign [[REG]], %d : !hw.struct<foo: i32>
+  // SV:   }
+  // SV: }
+  // SV: hw.output [[OUTPUT]] : !hw.struct<foo: i32>
+  %o = seq.reg %d, posedge %clk, enable %enable, noreset : !hw.struct<foo:i32>
+  hw.output %o : !hw.struct<foo:i32>
+}
+
+hw.module @testRegWithEnableAndNegedgeSyncReset(%clk: i1, %d: !hw.struct<foo:i32>, %enable: i1, %reset: i1, %resetValue : !hw.struct<foo:i32>) -> (%o : !hw.struct<foo:i32>) {
+  // SV-LABEL: hw.module @testRegWithEnableAndNegedgeSyncReset
+  // SV-NEXT:    [[REG:%.+]] = sv.reg : !hw.inout<struct<foo: i32>>
+  // SV-NEXT:    [[OUTPUT:%.+]] = sv.read_inout [[REG]] : !hw.inout<struct<foo: i32>>
+  // SV-NEXT:    sv.alwaysff(posedge %clk) {
+  // SV-NEXT:      sv.if %enable {
+  // SV-NEXT:        sv.passign [[REG]], %d : !hw.struct<foo: i32>
+  // SV-NEXT:      }
+  // SV-NEXT:    }(syncreset : negedge %reset) {
+  // SV-NEXT:      sv.passign [[REG]], %resetValue : !hw.struct<foo: i32>
+  // SV-NEXT:    }
+  // SV-NEXT:    hw.output [[OUTPUT]] : !hw.struct<foo: i32>
+  %o = seq.reg %d, posedge %clk, enable %enable, syncreset negedge %reset, %resetValue : !hw.struct<foo:i32> : !hw.struct<foo:i32>
+  hw.output %o : !hw.struct<foo:i32>
+}
