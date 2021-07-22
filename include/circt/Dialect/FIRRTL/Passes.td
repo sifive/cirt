@@ -109,6 +109,19 @@ def InferWidths : Pass<"firrtl-infer-widths", "firrtl::CircuitOp"> {
   let constructor = "circt::firrtl::createInferWidthsPass()";
 }
 
+def InferResets : Pass<"firrtl-infer-resets", "firrtl::CircuitOp"> {
+  let summary = "Infer reset synchronicity and add implicit resets";
+  let description = [{
+    This pass infers whether resets are synchronous or asynchronous, and extends
+    reset-less registers with an asynchronous reset based on the following
+    annotations:
+
+    - `sifive.enterprise.firrtl.FullAsyncResetAnnotation`
+    - `sifive.enterprise.firrtl.IgnoreFullAsyncResetAnnotation`
+  }];
+  let constructor = "circt::firrtl::createInferResetsPass()";
+}
+
 def BlackBoxReader : Pass<"firrtl-blackbox-reader", "CircuitOp"> {
   let summary = "Load source files for black boxes into the IR";
   let description = [{
