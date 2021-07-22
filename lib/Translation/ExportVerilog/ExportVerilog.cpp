@@ -516,6 +516,12 @@ namespace {
 struct ModuleNameManager {
   ModuleNameManager() : encounteredError(false) {}
 
+  /// Add the specified name to the name table, auto-uniquing the name if
+  /// required.  If the name is empty, then this creates a unique temp name.
+  StringRef addName(StringRef name) {
+    return legalizeName(name, usedNames, nextGeneratedNameID);
+  }
+
   StringRef addName(Value value, StringRef name) {
     return addName(ValueOrOp(value), name);
   }
@@ -569,7 +575,7 @@ private:
   /// and tracked.  It can also be null for things like outputs which are not
   /// tracked in the nameTable.
   StringRef addName(ValueOrOp valueOrOp, StringRef name) {
-    auto updatedName = legalizeName(name, usedNames, nextGeneratedNameID);
+    auto updatedName = addName(name);
     if (valueOrOp)
       nameTable[valueOrOp] = updatedName;
     return updatedName;
@@ -778,6 +784,10 @@ namespace {
 /// unsigned as seen from the Verilog language perspective.
 enum SubExprSignResult { IsSigned, IsUnsigned };
 
+/// This enum keeps track of whether the emitted subexpression was a constant,
+/// a wire, or anything more complex (like a parenthesized expression).
+enum class SubExprKind { Const, Wire, Other };
+
 /// This is information precomputed about each subexpression in the tree we
 /// are emitting as a unit.
 struct SubExprInfo {
@@ -787,8 +797,12 @@ struct SubExprInfo {
   /// The signedness of the expression.
   SubExprSignResult signedness;
 
-  SubExprInfo(VerilogPrecedence precedence, SubExprSignResult signedness)
-      : precedence(precedence), signedness(signedness) {}
+  /// The kind of this expression.
+  SubExprKind kind = SubExprKind::Other;
+
+  SubExprInfo(VerilogPrecedence precedence, SubExprSignResult signedness,
+              SubExprKind kind = SubExprKind::Other)
+      : precedence(precedence), signedness(signedness), kind(kind) {}
 };
 
 } // namespace
@@ -822,10 +836,11 @@ public:
   /// expression, we emit that expression, otherwise we emit a reference to the
   /// already computed name.
   ///
-  void emitExpression(Value exp, VerilogPrecedence parenthesizeIfLooserThan) {
+  SubExprInfo emitExpression(Value exp,
+                             VerilogPrecedence parenthesizeIfLooserThan) {
     // Emit the expression.
-    emitSubExpr(exp, parenthesizeIfLooserThan, OOLTopLevel,
-                /*signRequirement*/ NoRequirement);
+    return emitSubExpr(exp, parenthesizeIfLooserThan, OOLTopLevel,
+                       /*signRequirement*/ NoRequirement);
   }
 
 private:
@@ -1054,7 +1069,9 @@ SubExprInfo ExprEmitter::emitSubExpr(Value exp,
     }
 
     os << names.getName(exp);
-    return {Symbol, IsUnsigned};
+    return {Symbol, IsUnsigned,
+            op && isConstantExpression(op) ? SubExprKind::Const
+                                           : SubExprKind::Wire};
   }
 
   unsigned subExprStartIndex = outBuffer.size();
@@ -1690,9 +1707,13 @@ public:
 private:
   void collectNamesEmitDecls(Block &block);
 
-  void
+  SubExprInfo
   emitExpression(Value exp, SmallPtrSet<Operation *, 8> &emittedExprs,
                  VerilogPrecedence parenthesizeIfLooserThan = LowestPrecedence);
+
+  void emitEventControlExpression(
+      Value exp, SmallPtrSet<Operation *, 8> &emittedExprs,
+      VerilogPrecedence parenthesizeIfLooserThan = LowestPrecedence);
 
   using StmtVisitor::visitStmt;
   using Visitor::visitSV;
@@ -1785,19 +1806,21 @@ private:
 /// expression, we emit that expression, otherwise we emit a reference to the
 /// already computed name.
 ///
-void StmtEmitter::emitExpression(Value exp,
-                                 SmallPtrSet<Operation *, 8> &emittedExprs,
-                                 VerilogPrecedence parenthesizeIfLooserThan) {
+SubExprInfo
+StmtEmitter::emitExpression(Value exp,
+                            SmallPtrSet<Operation *, 8> &emittedExprs,
+                            VerilogPrecedence parenthesizeIfLooserThan) {
   SmallVector<Operation *> tooLargeSubExpressions;
-  ExprEmitter(emitter, outBuffer, emittedExprs, tooLargeSubExpressions, names)
-      .emitExpression(exp, parenthesizeIfLooserThan);
+  auto info = ExprEmitter(emitter, outBuffer, emittedExprs,
+                          tooLargeSubExpressions, names)
+                  .emitExpression(exp, parenthesizeIfLooserThan);
 
   // It is possible that the emitted expression was too large to fit on a line
   // and needs to be split.  If so, the new subexpressions that need emitting
   // are put out into the the 'tooLargeSubExpressions' list.  Re-emit these at
   // the start of the current statement as their own stmt expressions.
   if (tooLargeSubExpressions.empty())
-    return;
+    return info;
 
   // Pop this statement off and save it to the side.
   std::string thisStmt(outBuffer.begin() + statementBeginningIndex,
@@ -1829,6 +1852,56 @@ void StmtEmitter::emitExpression(Value exp,
     blockDeclarationInsertPointIndex = outBuffer.size();
     outBuffer.append(thisStmt.begin(), thisStmt.end());
   }
+
+  return info;
+}
+
+/// Emit the specified value as an expression inside a process' event control
+/// part (`@(...)`). This optionally enforces spilling the expression into a
+/// wire.
+void StmtEmitter::emitEventControlExpression(
+    Value exp, SmallPtrSet<Operation *, 8> &emittedExprs,
+    VerilogPrecedence parenthesizeIfLooserThan) {
+  // Remember where the current statement started (so we can insert before that
+  // if needed), and remember where the current expression started (which is
+  // where `emitExpression` will write whatever should go in the event control).
+  auto originalStatementBeginningIndex = statementBeginningIndex;
+  auto expressionBeginningIndex = outBuffer.size();
+
+  // Actually emit the expression.
+  SubExprInfo info =
+      emitExpression(exp, emittedExprs, parenthesizeIfLooserThan);
+  if (!state.options.useWireInEventControl || info.kind == SubExprKind::Wire)
+    return;
+
+  // Adjust the expression beginning to account for any additional statements
+  // the above might have emitted.
+  expressionBeginningIndex +=
+      statementBeginningIndex - originalStatementBeginningIndex;
+
+  // Stow away the current statement (e.g. the `always`) up to the beginning of
+  // the expression in the event control. Then stow that expression away
+  // separately.
+  std::string thisStmt(outBuffer.begin() + statementBeginningIndex,
+                       outBuffer.begin() + expressionBeginningIndex);
+  std::string thisExpr(outBuffer.begin() + expressionBeginningIndex,
+                       outBuffer.end());
+  outBuffer.resize(statementBeginningIndex);
+
+  // Decide on a name for the spilled value. If the original expression already
+  // had a name, reuse that as a hint.
+  SmallString<16> suggestedName(names.hasName(exp) ? names.getName(exp) : "");
+  suggestedName.append("_event");
+  auto name = names.addName(suggestedName);
+
+  // Spill the expression into a wire.
+  indent() << "wire ";
+  if (printPackedType(stripUnpackedTypes(exp.getType()), os,
+                      exp.getDefiningOp()))
+    os << ' ';
+  os << name << " = " << thisExpr << ";\n";
+  outBuffer.append(thisStmt.begin(), thisStmt.end());
+  os << name;
 }
 
 void StmtEmitter::emitStatementExpression(Operation *op) {
@@ -2245,7 +2318,7 @@ LogicalResult StmtEmitter::visitSV(AlwaysOp op) {
 
   auto printEvent = [&](AlwaysOp::Condition cond) {
     os << stringifyEventControl(cond.event) << ' ';
-    emitExpression(cond.value, ops);
+    emitEventControlExpression(cond.value, ops);
   };
 
   switch (op.getNumConditions()) {
@@ -2307,10 +2380,10 @@ LogicalResult StmtEmitter::visitSV(AlwaysFFOp op) {
     opString = "always_ff";
 
   indent() << opString << " @(" << stringifyEventControl(op.clockEdge()) << " ";
-  emitExpression(op.clock(), ops);
+  emitEventControlExpression(op.clock(), ops);
   if (op.resetStyle() == ResetType::AsyncReset) {
     os << " or " << stringifyEventControl(*op.resetEdge()) << " ";
-    emitExpression(op.reset(), ops);
+    emitEventControlExpression(op.reset(), ops);
   }
   os << ')';
 

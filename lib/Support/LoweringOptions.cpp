@@ -41,6 +41,8 @@ void LoweringOptions::parse(StringRef text, ErrorHandlerT errorHandler) {
       // Empty options are fine.
     } else if (option == "alwaysFF") {
       useAlwaysFF = true;
+    } else if (option == "wireInEventControl") {
+      useWireInEventControl = true;
     } else if (option.startswith("emittedLineLength=")) {
       option = option.drop_front(strlen("emittedLineLength="));
       if (option.getAsInteger(10, emittedLineLength)) {
@@ -59,6 +61,8 @@ std::string LoweringOptions::toString() const {
   // All options should add a trailing comma to simplify the code.
   if (useAlwaysFF)
     options += "alwaysFF,";
+  if (useWireInEventControl)
+    options += "wireInEventControl,";
   if (emittedLineLength != 90)
     options += "emittedLineLength=" + std::to_string(emittedLineLength) + ',';
 
