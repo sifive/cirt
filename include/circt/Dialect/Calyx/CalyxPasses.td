@@ -16,6 +16,20 @@
 
 include "mlir/Pass/PassBase.td"
 
+def CompileControl : Pass<"calyx-compile-control", "calyx::ComponentOp"> {
+  let summary = "Generates latency-insensitive finite state machines to realize control.";
+  let description = [{
+    This pass performs a bottom-up traversal of the control program and does the following:
+    1. For each control statement such as "calyx.seq", create a new GroupOp to contain all
+       the structure to realize the schedule.
+    2. Implement the schedule by setting the constituent groups' GoOp and DoneOp.
+    3. Replace the control statement in the control program with the corresponding
+       compilation group.
+  }];
+  let dependentDialects = ["comb::CombDialect", "hw::HWDialect"];
+  let constructor = "circt::calyx::createCompileControlPass()";
+}
+
 def GoInsertion : Pass<"calyx-go-insertion", "calyx::ComponentOp"> {
   let summary = "Insert go signals into the guards of a group's non-hole assignments";
   let description = [{

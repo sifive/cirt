@@ -1,4 +1,5 @@
 add_circt_dialect_library(CIRCTCalyxTransforms
+  CompileControl.cpp
   GoInsertion.cpp
 
   DEPENDS

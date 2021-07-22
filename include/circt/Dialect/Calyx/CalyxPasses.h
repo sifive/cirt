@@ -21,6 +21,8 @@
 namespace circt {
 namespace calyx {
 
+std::unique_ptr<mlir::Pass> createCompileControlPass();
+
 std::unique_ptr<mlir::Pass> createGoInsertionPass();
 
 /// Generate the code for registering passes.
