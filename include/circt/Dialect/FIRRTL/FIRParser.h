@@ -16,11 +16,18 @@
 
 namespace llvm {
 class SourceMgr;
-}
+class StringRef;
+} // namespace llvm
 
 namespace mlir {
 class MLIRContext;
 class OwningModuleRef;
+class OpBuilder;
+class Value;
+class Block;
+class Location;
+template <class T>
+class FailureOr;
 } // namespace mlir
 
 namespace circt {
@@ -37,6 +44,11 @@ mlir::OwningModuleRef importFIRRTL(llvm::SourceMgr &sourceMgr,
                                    FIRParserOptions options = {});
 
 void registerFromFIRRTLTranslation();
+
+/// Parse a string as a UInt/SInt literal.
+mlir::FailureOr<mlir::Value> parseIntegerLiteralExp(mlir::Block *into,
+                                                    llvm::StringRef input,
+                                                    mlir::Location loc);
 
 } // namespace firrtl
 } // namespace circt

@@ -38,6 +38,7 @@ using namespace firrtl;
 
 using llvm::SMLoc;
 using llvm::SourceMgr;
+using mlir::FailureOr;
 using mlir::LocationAttr;
 
 namespace json = llvm::json;
@@ -1474,7 +1475,6 @@ struct FIRStmtParser : public FIRParser {
   ParseResult parseSimpleStmt(unsigned stmtIndent);
   ParseResult parseSimpleStmtBlock(unsigned indent);
 
-private:
   /// Return the current modulet target, e.g., "~Foo|Bar".
   StringRef getModuleTarget() { return moduleContext.moduleTarget; }
 
@@ -3610,4 +3610,32 @@ void circt::firrtl::registerFromFIRRTLTranslation() {
       "import-firrtl", [](llvm::SourceMgr &sourceMgr, MLIRContext *context) {
         return importFIRRTL(sourceMgr, context);
       });
+}
+
+/// Parse a string as a UInt/SInt literal.
+FailureOr<Value> circt::firrtl::parseIntegerLiteralExp(Block *into,
+                                                       StringRef input,
+                                                       Location loc) {
+  // Populate a new source manager with the string input.
+  SourceMgr sourceMgr;
+  sourceMgr.AddNewSourceBuffer(llvm::MemoryBuffer::getMemBufferCopy(input),
+                               SMLoc());
+
+  // Setup a FIR parser.
+  FIRParserOptions options;
+  SharedParserConstants state(into->getParent()->getContext(), options);
+  FIRLexer lexer(sourceMgr, into->getParent()->getContext());
+  FIRModuleContext moduleContext(state, lexer, "");
+  FIRStmtParser parser(*into, moduleContext);
+
+  // Parse the literal.
+  Value value;
+  parser.locationProcessor.setInfoLoc(loc);
+  parser.locationProcessor.startStatement();
+  auto result = parser.parseIntegerLiteralExp(value);
+  parser.locationProcessor.endStatement(parser);
+
+  if (result)
+    return failure();
+  return value;
 }
