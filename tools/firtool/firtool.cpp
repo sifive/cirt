@@ -69,7 +69,7 @@ static cl::opt<bool> disableOptimization("disable-opt",
 
 static cl::opt<bool> inliner("inline",
                              cl::desc("Run the FIRRTL module inliner"),
-                             cl::init(false));
+                             cl::init(true));
 
 static cl::opt<bool> lowerToHW("lower-to-hw",
                                cl::desc("run the lower-to-hw pass"));

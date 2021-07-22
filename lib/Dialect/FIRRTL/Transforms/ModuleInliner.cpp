@@ -331,6 +331,11 @@ void Inliner::run() {
       continue;
     }
     inlineInstances(module);
+
+    // Delete the flatten annotations. Any module with the inline annotation
+    // will be deleted, as there won't be any remaining instances of it.
+    AnnotationSet(module).removeAnnotationsWithClass(
+        "firrtl.transforms.FlattenAnnotation");
   }
 
   // Delete all unreferenced modules.

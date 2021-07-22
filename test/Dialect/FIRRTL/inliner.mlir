@@ -69,7 +69,7 @@ firrtl.module @test2() {
 }
 }
 // CHECK-LABEL: firrtl.circuit "flattening" {
-// CHECK-NEXT:   firrtl.module @flattening() attributes {annotations = [{class = "firrtl.transforms.FlattenAnnotation"}]} {
+// CHECK-NEXT:   firrtl.module @flattening() attributes {
 // CHECK-NEXT:     %test1_test_wire = firrtl.wire : !firrtl.uint<2>
 // CHECK-NEXT:     %test1_test2_test_wire = firrtl.wire : !firrtl.uint<2>
 // CHECK-NEXT:   }
