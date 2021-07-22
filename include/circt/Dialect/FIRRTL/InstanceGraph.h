@@ -15,6 +15,7 @@
 #include "circt/Dialect/FIRRTL/FIRRTLOps.h"
 #include "circt/Support/LLVM.h"
 #include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/iterator.h"
 #include <deque>
 
@@ -72,7 +73,7 @@ class InstanceGraphNode {
   };
 
 public:
-  InstanceGraphNode() : module(nullptr) {}
+  InstanceGraphNode() : module(nullptr), depth(0) {}
 
   /// Get the module that this node is tracking.
   Operation *getModule() const { return module; }
@@ -93,6 +94,8 @@ public:
     return llvm::make_range(uses_begin(), uses_end());
   }
 
+  size_t getDepth() { return depth; }
+
 private:
   /// Record a new instance op in the body of this module. Returns a newly
   /// allocated InstanceRecord which will be owned by this node.
@@ -112,6 +115,10 @@ private:
 
   /// List of instances which instantiate this module.
   UseVec moduleUses;
+
+  ///  The depth of a node in a DAG is the length of the longest path from a
+  ///  source to the node.
+  size_t depth;
 
   // Provide access to the constructor.
   friend class InstanceGraph;
@@ -166,6 +173,11 @@ public:
   using iterator = NodeIterator;
   iterator begin() { return nodes.begin(); }
   iterator end() { return nodes.end(); }
+
+  /// Return the node of greatest depth in the graph that is an ancestor of both
+  /// node1 and node2, which is a lowest common ancestor of node1 and node2.
+  /// If there are multiple LCAs, then this will return any one of them.
+  InstanceGraphNode *getLCA(InstanceGraphNode *node1, InstanceGraphNode *node2);
 
 private:
   /// Get the node corresponding to the module.  If the node has does not exist

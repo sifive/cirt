@@ -176,6 +176,10 @@ def PrintInstanceGraph
     : Pass<"firrtl-print-instance-graph", "firrtl::CircuitOp"> {
   let summary = "Print a DOT graph of the module hierarchy.";
   let constructor =  "circt::firrtl::createPrintInstanceGraphPass()";
+  let options = [
+    Option<"printLCA", "print-LCA", "bool", "false",
+              "Print the lowest common ancestor for each pair of modules.">
+  ];
 }
 
 def GrandCentral : Pass<"firrtl-grand-central", "CircuitOp"> {

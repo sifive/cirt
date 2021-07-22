@@ -27,11 +27,12 @@ struct llvm::DOTGraphTraits<InstanceGraph *>
   static std::string getNodeLabel(InstanceGraphNode *node, InstanceGraph *) {
     // The name of the graph node is the module name.
     auto *op = node->getModule();
+    auto depth = "(" + std::to_string(node->getDepth()) + ")";
     if (auto module = dyn_cast<FModuleOp>(op)) {
-      return module.getName().str();
+      return module.getName().str() + depth;
     }
     if (auto extModule = dyn_cast<FExtModuleOp>(op)) {
-      return extModule.getName().str();
+      return extModule.getName().str() + depth;
     }
     return "<<unknown>>";
   }
@@ -55,6 +56,25 @@ struct PrintInstanceGraphPass
     llvm::WriteGraph(os, &instanceGraph, /*ShortNames=*/false,
                      circuitOp.name());
     markAllAnalysesPreserved();
+
+    if (printLCA)
+      for (InstanceGraphNode *node1 : instanceGraph) {
+        for (InstanceGraphNode *node2 : instanceGraph) {
+          if (node1 == node2)
+            continue;
+          auto lcaNode = instanceGraph.getLCA(node1, node2);
+          if (lcaNode != nullptr)
+            os << "\n LCA of ("
+               << llvm::DOTGraphTraits<InstanceGraph *>::getNodeLabel(
+                      node1, &instanceGraph)
+               << ","
+               << llvm::DOTGraphTraits<InstanceGraph *>::getNodeLabel(
+                      node2, &instanceGraph)
+               << ")="
+               << llvm::DOTGraphTraits<InstanceGraph *>::getNodeLabel(
+                      lcaNode, &instanceGraph);
+        }
+      }
   }
   raw_ostream &os;
 };
