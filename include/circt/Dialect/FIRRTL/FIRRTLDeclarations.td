@@ -247,6 +247,8 @@ def RegResetOp : FIRRTLOp<"regreset", [/*MemAlloc*/]> {
         StrAttr:$name, AnnotationArrayAttr:$annotations);
   let results = (outs PassiveType:$result);
 
+  let verifier = "return ::verifyRegResetOp(*this);";
+
   let builders = [
     OpBuilder<(ins "::mlir::Type":$elementType, "::mlir::Value":$clockVal,
                    "::mlir::Value":$resetSignal, "::mlir::Value":$resetValue,
