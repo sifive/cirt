@@ -118,6 +118,11 @@ static cl::opt<bool>
                           "Grand Central annotations"),
                  cl::init(false));
 
+static cl::opt<bool>
+    checkCombCycles("firrtl-check-comb-cycles",
+                    cl::desc("check combinational cycles on firrtl"),
+                    cl::init(false));
+
 enum OutputFormatKind {
   OutputMLIR,
   OutputVerilog,
@@ -253,6 +258,9 @@ processBuffer(std::unique_ptr<llvm::MemoryBuffer> ownedBuffer,
       blackBoxRoot, blackBoxRootResourcePath.empty()
                         ? blackBoxRoot
                         : blackBoxRootResourcePath));
+
+  if (checkCombCycles)
+    pm.nest<firrtl::CircuitOp>().addPass(firrtl::createCheckCombCyclesPass());
 
   if (grandCentral) {
     auto &circuitPM = pm.nest<firrtl::CircuitOp>();

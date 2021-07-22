@@ -194,4 +194,12 @@ def GrandCentralTaps : Pass<"firrtl-grand-central-taps", "firrtl::CircuitOp"> {
   let dependentDialects = ["sv::SVDialect"];
 }
 
+def CheckCombCycles : Pass<"firrtl-check-comb-cycles", "firrtl::CircuitOp"> {
+  let summary = "Check combinational cycles and emit errors";
+  let description = [{
+    This pass checks combinational cycles in the IR and emit errors.
+  }];
+  let constructor = "circt::firrtl::createCheckCombCyclesPass()";
+}
+
 #endif // CIRCT_DIALECT_FIRRTL_PASSES_TD
