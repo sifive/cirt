@@ -14,9 +14,16 @@
 #include "mlir/IR/Threading.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/TinyPtrVector.h"
+#include "llvm/Support/CommandLine.h"
 
 using namespace circt;
 using namespace firrtl;
+
+static llvm::cl::opt<bool> keepConnects("imconstprop-keep-connects",
+                                        llvm::cl::init(false));
+static llvm::cl::opt<size_t> stopAfterNXForms("imconstprop-stop-after",
+                                              llvm::cl::init(~0ULL));
+static std::atomic<unsigned> xformCount = {0};
 
 /// Return true if this is a wire or register.
 static bool isWireOrReg(Operation *op) {
@@ -311,6 +318,8 @@ void IMConstPropPass::runOnOperation() {
   mlir::parallelForEach(circuit.getContext(),
                         circuit.getBody()->getOps<FModuleOp>(),
                         [&](auto op) { rewriteModuleBody(op); });
+
+  fprintf(stderr, "imconst prop did %u xforms\n", xformCount.load());
 
   // Clean up our state for next time.
   instanceGraph = nullptr;
@@ -654,6 +663,11 @@ void IMConstPropPass::rewriteModuleBody(FModuleOp module) {
         it->second.isUnknown())
       return false;
 
+    // Stop changing the IR after a certain point.
+    if (xformCount >= stopAfterNXForms)
+      return false;
+    ++xformCount;
+
     // TODO: Unique constants into the entry block of the module.
     Attribute constantValue = it->second.getValue();
     auto *cst = module->getDialect()->materializeConstant(
@@ -685,7 +699,8 @@ void IMConstPropPass::rewriteModuleBody(FModuleOp module) {
     // Connects to values that we found to be constant can be dropped.
     if (auto connect = dyn_cast<ConnectOp>(op)) {
       if (auto *destOp = connect.dest().getDefiningOp()) {
-        if (isDeletableWireOrReg(destOp) && !isOverdefined(connect.dest()))
+        if (isDeletableWireOrReg(destOp) && !isOverdefined(connect.dest()) &&
+            !keepConnects)
           connect.erase();
       }
       continue;
