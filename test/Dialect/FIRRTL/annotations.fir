@@ -735,13 +735,15 @@ circuit GCTInterface : %[
     ; "r" should be annotated.
     ; CHECK: firrtl.module @GCTInterface
     ; CHECK-SAME: %a: [[TYPE:.+]] {firrtl.annotations = [
-    ; CHECK-SAME:   #firrtl.subAnno<fieldID = [0, 0], {
-    ; CHECK-SAME:     class = "sifive.enterprise.grandcentral.AugmentedGroundType",
+    ; CHECK-SAME:   #firrtl.subAnno<fieldID = [0, 0],
+    ; CHECK-SAME:     {class = "sifive.enterprise.grandcentral.AugmentedGroundType",
     ; CHECK-SAME:     defName = "ViewName",
     ; CHECK-SAME:     name = "port"}>]}
     ; CHECK-SAME: annotations = [
     ; CHECK-SAME:   {class = "sifive.enterprise.grandcentral.GrandCentralView$SerializedViewAnnotation",
+    ; CHECK-SAME:    defName = "ViewName",
     ; CHECK-SAME:    id = [[ID]] : i64,
+    ; CHECK-SAME:    name = "view",
     ; CHECK-SAME:    type = "parent"}]
     ; CHECK: firrtl.reg
     ; CHECK-SAME: annotations

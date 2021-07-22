@@ -380,7 +380,11 @@ void GrandCentralPass::runOnOperation() {
   if (annotations.empty())
     return;
 
-  auto builder = OpBuilder::atBlockEnd(circuitOp->getBlock());
+  // Setup the builder to create ops _inside the FIRRTL circuit_.  This is
+  // necessary because interfaces and interface instances are created.
+  // Instances link to their definitions via symbols and we don't want to break
+  // this.
+  auto builder = OpBuilder::atBlockEnd(circuitOp.getBody());
 
   // Utility that acts like emitOpError, but does _not_ include a note.  The
   // note in emitOpError includes the entire op which means the **ENTIRE**
@@ -446,6 +450,37 @@ void GrandCentralPass::runOnOperation() {
       if (visitor.hasFailed())
         return signalPassFailure();
       AnnotationSet annotations(&op);
+      // Insert an instantiated interface
+      if (auto viewAnnotation = annotations.getAnnotation(
+              "sifive.enterprise.grandcentral.GrandCentralView$"
+              "SerializedViewAnnotation")) {
+        auto tpe = viewAnnotation.getAs<StringAttr>("type");
+        if (tpe && tpe.getValue() == "parent") {
+          auto name = viewAnnotation.getAs<StringAttr>("name");
+          auto defName = viewAnnotation.getAs<StringAttr>("defName");
+          auto guard = OpBuilder::InsertionGuard(builder);
+          builder.setInsertionPointToEnd(cast<FModuleOp>(op).getBodyBlock());
+          auto instance = builder.create<sv::InterfaceInstanceOp>(
+              circuitOp->getLoc(),
+              interfaces.lookup(defName.getValue()).getInterfaceType(), name,
+              builder.getStringAttr("__" + defName.getValue() + "__"));
+          instance->setAttr("doNotPrint", builder.getBoolAttr(true));
+          builder.setInsertionPointToStart(
+              op.getParentOfType<ModuleOp>().getBody());
+          auto bind = builder.create<sv::BindInterfaceOp>(
+              circuitOp->getLoc(),
+              builder.getSymbolRefAttr(
+                  ("__" + defName.getValue() + "__").str()));
+          bind->setAttr(
+              "output_file",
+              hw::OutputFileAttr::get(
+                  builder.getStringAttr(""),
+                  builder.getStringAttr("bindings.sv"),
+                  /*exclude_from_filelist=*/builder.getBoolAttr(true),
+                  /*exclude_replicated_ops=*/builder.getBoolAttr(true),
+                  bind.getContext()));
+        }
+      }
       annotations.removeAnnotations([](auto anno) {
         return anno.isClass("sifive.enterprise.grandcentral.GrandCentralView$"
                             "SerializedViewAnnotation");
